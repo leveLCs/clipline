@@ -14,7 +14,7 @@
 - [x] Modify HotKey.swift to per-registration IDs. In AppDelegate.swift add capture action/menu/conflict retry; pass explicit source rect to existing hangCapture, suppress line while selecting, and reveal explicit captures over full screen. Independent code review covered shortcut dispatch/removal and capture cleanup.
 - [x] Build with scripts/build-app.sh, run scripts/test.sh and scripts/check-strings.swift. Verify Info.plist, universal architectures and codesign.
 - [ ] Exercise actual shortcuts, both capture modes and cancellation in the running app.
-- [ ] Commit/push reviewed source to the authorized fork.
+- [x] Commit/push reviewed source to the authorized fork, branch `codex/capture-ocr`.
 
 ## Verification commands
 `scripts/test.sh`
@@ -32,3 +32,4 @@ Runtime checks: use synthetic visible Chinese/English fixture with native ⌘⇧
 - All 70 localization keys match across 12 languages, including the new complete Traditional Chinese localization.
 - Release app built for arm64 and x86_64; strict codesign verification passed with local ad-hoc signing.
 - Independent source review found no blocking issue. Runtime event delivery, multiple physical displays and full-screen Spaces remain separate from geometry/unit-test coverage.
+- The user granted screen-recording access and opened region capture. The running app's full-screen overlay and Traditional Chinese mode instructions were visually verified. The UI driver then reported that the app state changed during its drag attempt; neither an OCR clipboard result nor a hung screenshot was confirmed in that attempt. End-to-end OCR, Command-held hanging and Esc cancellation remain pending manual confirmation.
