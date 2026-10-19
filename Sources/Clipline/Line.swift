@@ -260,8 +260,8 @@ final class Line: ObservableObject {
         return candidate
     }
 
-    /// Long press: open the photo in the system Markup editor. Markup does
-    /// not edit video, so a recording opens in the trimming editor instead.
+    /// Long press: open the photo in Clipline’s native annotation editor.
+    /// Recordings continue to open in the trimming editor.
     func markup(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
         if item.isRecording {

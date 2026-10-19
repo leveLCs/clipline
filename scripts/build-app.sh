@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$PWD/.build/ModuleCache}"
 CONFIG="${1:-release}"
 APP="build/Clipline.app"
-VERSION="0.2.0"
+VERSION="0.3.0"
 
 # Builds one architecture and prints the binary's path.
 # The Command Line Tools for macOS 27 ship an SDK whose SwiftUI needs a macro

@@ -9,3 +9,5 @@ swiftc -parse-as-library -o .build/checks/capture-checks \
   Sources/Clipline/DdddOCR.swift Sources/Clipline/Localization.swift \
   Sources/Clipline/Inbox.swift Tests/CliplineTests/CaptureTests.swift
 .build/checks/capture-checks
+scripts/test-annotations.sh
+scripts/test-annotation-editor.sh
