@@ -45,6 +45,11 @@ struct AnnotationTests {
             ("Canvas gestures create every tool and commit once", tests.canvasGestures),
             ("Canvas move magnifier resize crop and history", tests.canvasEditing),
             ("Canvas reselect old annotations across drawing tools", tests.canvasReselect),
+            ("Canvas directly drags unselected elements from every drawing tool", tests.canvasDirectDrag),
+            ("Canvas cursor follows the same target as editing and handles", tests.canvasCursors),
+            ("Each annotation exposes matching controls and uniform badge or stroke scaling", tests.elementControls),
+            ("Small stroke handles choose the nearest visible control", tests.smallStrokeHandles),
+            ("Selected element delete button is accessible and undoable", tests.canvasDeleteButton),
             ("Canvas selection preserves nested drawing and brush strokes", tests.canvasSelectionDrawing),
             ("Badge background and text color share style semantics", tests.badgeColors),
             ("Renderer throwing effects restore caller clipping", tests.throwingEffects),
@@ -304,11 +309,12 @@ struct AnnotationTests {
         let canvas = AnnotationCanvas(document: doc)
         var changes = 0
         canvas.onDocumentChanged = { changes += 1 }
-        for kind in AnnotationKind.allCases where kind != .hand && kind != .eraser {
+        for (index, kind) in AnnotationKind.allCases.filter({ $0 != .hand && $0 != .eraser }).enumerated() {
+            let start = CGPoint(x: 20 + (index % 4) * 180, y: 20 + (index / 4) * 130)
             canvas.selectTool(kind)
-            canvas.beginInteraction(at: CGPoint(x: 20, y: 20))
-            canvas.updateInteraction(to: CGPoint(x: 120, y: 90))
-            canvas.updateInteraction(to: CGPoint(x: 150, y: 110))
+            canvas.beginInteraction(at: start)
+            canvas.updateInteraction(to: CGPoint(x: start.x + 60, y: start.y + 35))
+            canvas.updateInteraction(to: CGPoint(x: start.x + 90, y: start.y + 60))
             expect(changes == doc.state.annotations.count)
             canvas.endInteraction()
             canvas.finishTextEditing()
@@ -365,7 +371,7 @@ struct AnnotationTests {
 
         canvas.selectedID = nil
         canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.updateInteraction(to: CGPoint(x: 260, y: 190)); canvas.endInteraction()
-        expect(doc.state.annotations.count == 3 && doc.state.annotations[0] == arrow)
+        expect(doc.state.annotations == [arrow.translated(by: CGSize(width: 60, height: 90)), line])
         canvas.undo()
 
         // Click tolerance follows the view scale, and selection never writes history.
@@ -374,8 +380,8 @@ struct AnnotationTests {
         expect(canvas.selectedID == arrow.id && doc.state.annotations == [arrow, line])
         canvas.selectedID = nil
         canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.updateInteraction(to: CGPoint(x: 220, y: 180)); canvas.updateInteraction(to: CGPoint(x: 200, y: 100)); canvas.endInteraction()
-        expect(doc.state.annotations.count == 3 && doc.state.annotations.last?.kind == .line)
-        canvas.undo(); canvas.selectedID = nil
+        expect(doc.state.annotations == [arrow, line])
+        canvas.selectedID = nil
         canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.updateInteraction(to: CGPoint(x: 250, y: 170)); canvas.cancelInteraction()
         expect(doc.state.annotations == [arrow, line])
 
@@ -384,6 +390,20 @@ struct AnnotationTests {
         canvas.selectedID = nil
         canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.endInteraction()
         expect(canvas.selectedID == upper.id && doc.state.annotations.count == 2)
+    }
+
+    @MainActor func canvasDirectDrag() throws {
+        for tool in AnnotationKind.allCases where tool != .eraser {
+            let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+            let arrow = Annotation(kind: .arrow, rect: CGRect(x: 100, y: 100, width: 200, height: 0), points: [CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 100)])
+            doc.commit(state: AnnotationState(annotations: [arrow]), label: "Fixture")
+            let canvas = AnnotationCanvas(document: doc); canvas.selectTool(tool)
+            canvas.beginInteraction(at: CGPoint(x: 200, y: 100))
+            canvas.updateInteraction(to: CGPoint(x: 240, y: 150)); canvas.endInteraction()
+            expect(doc.state.annotations == [arrow.translated(by: CGSize(width: 40, height: 50))])
+            expect(canvas.selectedID == arrow.id)
+            canvas.undo(); expect(doc.state.annotations == [arrow])
+        }
     }
 
     @MainActor func canvasSelectionDrawing() throws {
@@ -408,8 +428,93 @@ struct AnnotationTests {
             canvas.beginInteraction(at: CGPoint(x: 100, y: 100)); canvas.updateInteraction(to: CGPoint(x: 300, y: 200)); canvas.endInteraction()
             let first = try require(doc.state.annotations.first)
             canvas.beginInteraction(at: CGPoint(x: 200, y: 150)); canvas.updateInteraction(to: CGPoint(x: 300, y: 280)); canvas.endInteraction()
-            expect(doc.state.annotations.count == 2 && doc.state.annotations[0] == first)
+            expect(doc.state.annotations == [first.translated(by: CGSize(width: 100, height: 130))])
+            canvas.beginInteraction(at: CGPoint(x: 500, y: 350)); canvas.updateInteraction(to: CGPoint(x: 600, y: 420)); canvas.endInteraction()
+            expect(doc.state.annotations.count == 2)
         }
+    }
+
+    @MainActor func canvasCursors() throws {
+        let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+        let arrow = Annotation(kind: .arrow, rect: CGRect(x: 100, y: 100, width: 200, height: 0), points: [CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 100)])
+        doc.commit(state: AnnotationState(annotations: [arrow]), label: "Fixture")
+        let canvas = AnnotationCanvas(document: doc)
+        canvas.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        canvas.selectTool(.pen)
+        let body = CGPoint(x: 200, y: 100)
+        expect(canvas.editTarget(at: body) == .item(arrow.id))
+        expect(canvas.cursor(atView: canvas.viewPoint(fromSource: body)) === NSCursor.openHand)
+        expect(canvas.cursor(atView: canvas.viewPoint(fromSource: CGPoint(x: 500, y: 400))) === NSCursor.crosshair)
+        canvas.beginInteraction(at: body)
+        expect(canvas.cursor(atView: canvas.viewPoint(fromSource: body)) === NSCursor.closedHand)
+        canvas.endInteraction()
+        expect(canvas.cursor(atView: canvas.viewPoint(fromSource: body)) === NSCursor.openHand)
+        expect(canvas.editTarget(at: arrow.points[0]) == .handle(arrow.id, .start))
+        expect(canvas.cursor(atView: canvas.viewPoint(fromSource: arrow.points[0])) === NSCursor.crosshair)
+        canvas.zoom(to: 0.5)
+        expect(canvas.editTarget(at: CGPoint(x: 110, y: 100)) == .handle(arrow.id, .start))
+        canvas.selectedID = nil
+        expect(canvas.cursor(atView: canvas.viewPoint(fromSource: body)) === NSCursor.openHand)
+        canvas.selectTool(.eraser)
+        expect(canvas.editTarget(at: body) == nil && canvas.cursor(atView: canvas.viewPoint(fromSource: body)) === NSCursor.crosshair)
+        canvas.selectTool(.hand); canvas.isCropping = true
+        expect(canvas.editTarget(at: body) == nil && canvas.cursor(atView: canvas.viewPoint(fromSource: body)) === NSCursor.crosshair)
+    }
+
+    func elementControls() throws {
+        for kind in AnnotationKind.allCases where kind != .hand && kind != .eraser {
+            var item = Annotation(kind: kind, rect: CGRect(x: 100, y: 100, width: 200, height: 100))
+            if [.line, .arrow, .pen, .highlighter].contains(kind) { item.points = [CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 200)] }
+            let handles = AnnotationCanvasGeometry.selectionHandles(item)
+            let count = item.isDirectional ? 2 : ([AnnotationKind.step, .stamp, .pen, .highlighter].contains(kind) ? 4 : ([.magnify, .bubble].contains(kind) ? 9 : 8))
+            expect(handles.count == count)
+        }
+        var badge = Annotation(kind: .step, rect: CGRect(x: 100, y: 100, width: 32, height: 32))
+        badge.style.size = 80
+        let old = AnnotationCanvasGeometry.selectionRect(badge)
+        expect(old.width == 80 && old.midX == badge.rect.midX)
+        let bigger = AnnotationCanvasGeometry.resized(badge, handle: .bottomRight, to: CGPoint(x: old.minX + 160, y: old.minY + 160), shift: false)
+        expect(bigger.style.size == 160 && bigger.rect.width == 160 && bigger.rect.height == 160)
+        for points in [[CGPoint(x: 100, y: 100)], [CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 100)], [CGPoint(x: 100, y: 100), CGPoint(x: 100, y: 300)]] {
+            for kind in [AnnotationKind.pen, .highlighter] {
+                var stroke = Annotation(kind: kind, points: points); stroke.style.lineWidth = 16
+                let bounds = AnnotationCanvasGeometry.selectionRect(stroke)
+                let handles = AnnotationCanvasGeometry.selectionHandles(stroke)
+                expect(handles.count == 4 && bounds.width > 0 && bounds.height > 0)
+                let resized = AnnotationCanvasGeometry.resized(stroke, handle: .bottomRight, to: CGPoint(x: bounds.minX + bounds.width * 2, y: bounds.minY + bounds.height * 2), shift: false)
+                expect(resized.style.lineWidth == 32)
+                expect(AnnotationCanvasGeometry.selectionRect(resized).width == bounds.width * 2)
+                expect(AnnotationCanvasGeometry.selectionRect(resized).height == bounds.height * 2)
+            }
+        }
+    }
+
+    @MainActor func smallStrokeHandles() throws {
+        for points in [[CGPoint(x: 100, y: 100)], [CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 100)], [CGPoint(x: 100, y: 100), CGPoint(x: 100, y: 300)]] {
+            let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+            let item = Annotation(kind: .pen, points: points)
+            doc.commit(state: AnnotationState(annotations: [item]), label: "Fixture")
+            let canvas = AnnotationCanvas(document: doc); canvas.selectedID = item.id
+            for (handle, point) in AnnotationCanvasGeometry.selectionHandles(item) {
+                expect(canvas.editTarget(at: point) == .handle(item.id, handle))
+            }
+        }
+    }
+
+    @MainActor func canvasDeleteButton() throws {
+        let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+        let item = Annotation(kind: .ellipse, rect: CGRect(x: 100, y: 100, width: 200, height: 100))
+        doc.commit(state: AnnotationState(annotations: [item]), label: "Fixture")
+        let canvas = AnnotationCanvas(document: doc); canvas.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        canvas.selectTool(.line); canvas.selectedID = item.id
+        let button = try require(canvas.subviews.compactMap { $0 as? NSButton }.first)
+        expect(!button.isHidden && button.accessibilityLabel() == L("Delete annotation"))
+        let size = button.frame.size
+        canvas.zoom(to: 0.5); expect(button.frame.size == size)
+        expect(canvas.cursor(atView: CGPoint(x: button.frame.midX, y: button.frame.midY)) === NSCursor.pointingHand)
+        button.performClick(nil); expect(doc.state.annotations.isEmpty && button.isHidden)
+        canvas.undo(); expect(doc.state.annotations == [item])
+        canvas.selectedID = item.id; canvas.isCropping = true; expect(button.isHidden)
     }
 
     func badgeColors() throws {

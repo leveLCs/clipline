@@ -18,7 +18,7 @@ struct AnnotationViewport: Equatable {
     }
 }
 
-enum AnnotationHandle: CaseIterable {
+enum AnnotationHandle: CaseIterable, Equatable {
     case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left, start, end, source, tail
 }
 
@@ -51,6 +51,27 @@ enum AnnotationCanvasGeometry {
          (.bottomRight, CGPoint(x: rect.maxX, y: rect.maxY)), (.bottom, CGPoint(x: rect.midX, y: rect.maxY)),
          (.bottomLeft, CGPoint(x: rect.minX, y: rect.maxY)), (.left, CGPoint(x: rect.minX, y: rect.midY))]
     }
+    static func selectionRect(_ item: Annotation) -> CGRect {
+        if item.kind == .step {
+            return CGRect(x: item.rect.midX - item.style.size / 2, y: item.rect.midY - item.style.size / 2,
+                          width: item.style.size, height: item.style.size)
+        }
+        if item.kind == .pen || item.kind == .highlighter { return item.bounds }
+        return item.rect.standardized
+    }
+    static func selectionHandles(_ item: Annotation) -> [(AnnotationHandle, CGPoint)] {
+        if item.isDirectional {
+            let points = item.points.count >= 2 ? item.points : [item.rect.origin, CGPoint(x: item.rect.maxX, y: item.rect.maxY)]
+            return [(.start, points[0]), (.end, points[points.count - 1])]
+        }
+        var handles = handles(selectionRect(item))
+        if [.step, .stamp, .pen, .highlighter].contains(item.kind) {
+            handles = handles.filter { [.topLeft, .topRight, .bottomLeft, .bottomRight].contains($0.0) }
+        }
+        if item.kind == .magnify, !item.style.magnifierLinked { handles.append((.source, item.magnifierSource ?? CGPoint(x: item.rect.midX, y: item.rect.midY))) }
+        if item.kind == .bubble { handles.append((.tail, item.points.last ?? CGPoint(x: item.rect.midX, y: item.rect.maxY + 18))) }
+        return handles
+    }
     static func resizedRect(_ rect: CGRect, handle: AnnotationHandle, to point: CGPoint, shift: Bool) -> CGRect {
         var a = rect.origin, b = CGPoint(x: rect.maxX, y: rect.maxY)
         if [.topLeft, .left, .bottomLeft].contains(handle) { a.x = point.x }
@@ -78,6 +99,32 @@ enum AnnotationCanvasGeometry {
             let index = handle == .start ? 0 : points.count - 1
             points[index] = shift ? constrained(point, from: points[index == 0 ? points.count - 1 : 0], line: true) : point
             result.points = points; result.rect = rect(from: points[0], to: points[points.count - 1])
+            return result
+        }
+        if [.step, .stamp, .pen, .highlighter].contains(item.kind) {
+            let old = selectionRect(item)
+            let opposite: CGPoint
+            switch handle {
+            case .topLeft: opposite = CGPoint(x: old.maxX, y: old.maxY)
+            case .topRight: opposite = CGPoint(x: old.minX, y: old.maxY)
+            case .bottomLeft: opposite = CGPoint(x: old.maxX, y: old.minY)
+            default: opposite = old.origin
+            }
+            let stroke = item.kind == .pen || item.kind == .highlighter
+            let minimum: CGFloat = item.kind == .highlighter ? 12 : 1
+            let size = stroke ? max(minimum, item.style.lineWidth) : item.style.size
+            let scale = min(10000 / size, max(minimum / size, max(abs(point.x - opposite.x) / max(old.width, 1), abs(point.y - opposite.y) / max(old.height, 1))))
+            let target = CGRect(x: point.x < opposite.x ? opposite.x - old.width * scale : opposite.x,
+                                y: point.y < opposite.y ? opposite.y - old.height * scale : opposite.y,
+                                width: old.width * scale, height: old.height * scale)
+            result.rect = target
+            if item.kind == .step { result.style.size = target.width }
+            else if item.kind == .stamp { result.style.size = min(10000, item.style.size * scale) }
+            else {
+                result.points = item.points.map { CGPoint(x: target.minX + ($0.x - old.minX) * scale, y: target.minY + ($0.y - old.minY) * scale) }
+                result.style.lineWidth = min(10000, max(item.kind == .highlighter ? 12 : 1, item.style.lineWidth) * scale)
+                if let first = result.points.first { result.rect = result.points.reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) } }
+            }
             return result
         }
         return item.resized(to: resizedRect(item.rect, handle: handle, to: point, shift: shift))
@@ -128,7 +175,8 @@ enum AnnotationCanvasGeometry {
         return item.contains(point, tolerance: tolerance)
     }
     static func hitForEditing(_ item: Annotation, at point: CGPoint, tolerance: CGFloat) -> Bool {
-        let outline = ([AnnotationKind.rectangle, .ellipse].contains(item.kind) && !item.style.filled) || item.kind == .spotlight
+        if item.kind == .note, hypot(point.x - item.noteBadgeCenter.x, point.y - item.noteBadgeCenter.y) <= item.style.size / 2 + tolerance { return true }
+        let outline = ([AnnotationKind.rectangle, .ellipse].contains(item.kind) && !item.style.filled) || item.kind == .spotlight || (item.kind == .note && !item.isDirectional)
         guard outline else { return hit(item, at: point, tolerance: tolerance) }
         // Empty interiors remain available for nested annotations while a drawing tool is active.
         let margin = tolerance + item.style.lineWidth / 2
@@ -148,7 +196,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     let document: AnnotationDocument
     private(set) var tool: AnnotationKind = .hand
     var style = AnnotationStyle()
-    var selectedID: UUID? { didSet { if oldValue != selectedID { needsDisplay = true; onSelectionChanged?(selectedAnnotation) } } }
+    var selectedID: UUID? { didSet { if oldValue != selectedID { updateSelectionControls(); needsDisplay = true; onSelectionChanged?(selectedAnnotation) } } }
     var selectedAnnotation: Annotation? { state.annotations.first { $0.id == selectedID } }
     var onSelectionChanged: ((Annotation?) -> Void)?
     var onDocumentChanged: (() -> Void)?
@@ -158,7 +206,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     var onOCR: (() -> Void)?
     var onError: ((Error) -> Void)?
     /// Enabled by the controller for crop mode; crop is separate from the document's drawing tools.
-    var isCropping = false { didSet { finishTextEditing(); selectedID = nil; needsDisplay = true } }
+    var isCropping = false { didSet { finishTextEditing(); selectedID = nil; updateSelectionControls(); needsDisplay = true } }
     var clickCreatesShapes = true
     var stampText = "👍"
     var contentInsets = NSEdgeInsets(top: 24, left: 24, bottom: 100, right: 24)
@@ -176,6 +224,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private var finishingText = false
     private var isPanning = false
     private var lastPan: CGPoint = .zero
+    private var tracking: NSTrackingArea?
+    private let deleteButton = NSButton()
+
+    enum EditTarget: Equatable { case handle(UUID, AnnotationHandle), item(UUID) }
 
     private struct Gesture {
         enum Action { case create, move(UUID), resize(UUID, AnnotationHandle), erase, cropCreate, cropMove, cropResize(AnnotationHandle) }
@@ -183,7 +235,6 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         var start: CGPoint
         var base: AnnotationState
         var item: Annotation?
-        var clickTarget: UUID?
         var didDrag = false
     }
 
@@ -193,6 +244,15 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         wantsLayer = true
         setAccessibilityLabel(L("Annotation canvas"))
         setAccessibilityRole(.group)
+        deleteButton.isBordered = false; deleteButton.imagePosition = .imageOnly
+        deleteButton.setButtonType(.momentaryPushIn); deleteButton.sendAction(on: .leftMouseUp)
+        deleteButton.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: L("Delete annotation"))?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 18, weight: .regular))
+        deleteButton.contentTintColor = .white; deleteButton.wantsLayer = true
+        deleteButton.layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.95).cgColor; deleteButton.layer?.cornerRadius = 9
+        deleteButton.setAccessibilityLabel(L("Delete annotation")); deleteButton.toolTip = L("Delete annotation")
+        deleteButton.target = self; deleteButton.action = #selector(deleteClicked)
+        deleteButton.isHidden = true; addSubview(deleteButton)
         document.onChange = { [weak self] in
             guard let self else { return }
             self.preview = nil
@@ -273,7 +333,18 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     }
     func requestOCR() { finishTextEditing(); onOCR?() }
     func requestCopy() { finishTextEditing(); onCopy?() }
-    private func invalidateImage() { cacheDirty = true; needsDisplay = true }
+    private func invalidateImage() { cacheDirty = true; needsDisplay = true; updateSelectionControls() }
+    @objc private func deleteClicked() { deleteSelection(); window?.makeFirstResponder(self) }
+    private func updateSelectionControls() {
+        deleteButton.isHidden = selectedAnnotation == nil || isCropping || tool == .eraser || editor != nil
+        if let item = selectedAnnotation {
+            let rect = AnnotationCanvasGeometry.selectionRect(item)
+            let anchor = item.isDirectional ? (item.points.last ?? CGPoint(x: rect.maxX, y: rect.maxY)) : CGPoint(x: rect.maxX, y: rect.minY)
+            let p = viewport.viewPoint(anchor)
+            deleteButton.frame = CGRect(x: max(0, min(bounds.width - 18, p.x + 7)), y: max(0, min(bounds.height - 18, p.y - 25)), width: 18, height: 18)
+        }
+        window?.invalidateCursorRects(for: self)
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill(); bounds.fill()
@@ -290,11 +361,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             NSColor.white.setStroke(); let border = NSBezierPath(rect: r); border.lineWidth = 1; border.stroke()
             if isCropping { drawHandles(AnnotationCanvasGeometry.handles(crop), color: .white) }
         }
-        if !isCropping, let item = selectedAnnotation {
-            NSColor.controlAccentColor.setStroke()
-            let border = NSBezierPath(rect: viewport.viewRect(item.bounds)); border.lineWidth = 1
-            border.setLineDash([4, 3], count: 2, phase: 0); border.stroke()
-            drawHandles(selectionHandles(item), color: .controlAccentColor)
+        if !isCropping, tool != .eraser, let item = selectedAnnotation {
+            drawHandles(AnnotationCanvasGeometry.selectionHandles(item), color: NSColor(srgbRed: 0.1, green: 0.52, blue: 0.76, alpha: 1), circular: true)
         }
     }
     private func rebuildImage() {
@@ -311,37 +379,36 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         do { try AnnotationRenderer.draw(source: document.source, state: drawing, in: context); cachedImage = context.makeImage(); cacheDirty = false }
         catch { cachedImage = nil; cacheDirty = false; onError?(error) }
     }
-    private func drawHandles(_ handles: [(AnnotationHandle, CGPoint)], color: NSColor) {
-        for (handle, point) in handles {
-            let p = viewport.viewPoint(point), r = CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)
-            let path = handle == .source || handle == .tail ? NSBezierPath(ovalIn: r) : NSBezierPath(rect: r)
-            color.setFill(); path.fill(); NSColor.black.withAlphaComponent(0.65).setStroke(); path.lineWidth = 1; path.stroke()
+    private func drawHandles(_ handles: [(AnnotationHandle, CGPoint)], color: NSColor, circular: Bool = false) {
+        for (_, point) in handles {
+            let p = viewport.viewPoint(point), radius: CGFloat = circular ? 4.5 : 4
+            let r = CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)
+            let path = circular ? NSBezierPath(ovalIn: r) : NSBezierPath(rect: r)
+            color.setFill(); path.fill(); (circular ? NSColor.white : NSColor.black.withAlphaComponent(0.65)).setStroke(); path.lineWidth = 1; path.stroke()
         }
-    }
-    private func selectionHandles(_ item: Annotation) -> [(AnnotationHandle, CGPoint)] {
-        if item.isDirectional {
-            let points = item.points.count >= 2 ? item.points : [item.rect.origin, CGPoint(x: item.rect.maxX, y: item.rect.maxY)]
-            return [(.start, points[0]), (.end, points[points.count - 1])]
-        }
-        var handles = AnnotationCanvasGeometry.handles(item.rect)
-        if item.kind == .magnify, !item.style.magnifierLinked { handles.append((.source, item.magnifierSource ?? CGPoint(x: item.rect.midX, y: item.rect.midY))) }
-        if item.kind == .bubble { handles.append((.tail, item.points.last ?? CGPoint(x: item.rect.midX, y: item.rect.maxY + 18))) }
-        return handles
     }
     private func hitHandle(_ handles: [(AnnotationHandle, CGPoint)], at point: CGPoint) -> AnnotationHandle? {
-        handles.reversed().first { hypot($0.1.x - point.x, $0.1.y - point.y) <= 7 / viewport.scale }?.0
+        handles.reversed().filter { hypot($0.1.x - point.x, $0.1.y - point.y) <= 7 / viewport.scale }
+            .min { hypot($0.1.x - point.x, $0.1.y - point.y) < hypot($1.1.x - point.x, $1.1.y - point.y) }?.0
     }
-    private func topItem(at point: CGPoint) -> Annotation? {
-        state.annotations.reversed().first { AnnotationCanvasGeometry.hit($0, at: point, tolerance: 5 / viewport.scale) }
+    func editTarget(at point: CGPoint) -> EditTarget? {
+        guard !isCropping, tool != .eraser else { return nil }
+        if let item = selectedAnnotation, let handle = hitHandle(AnnotationCanvasGeometry.selectionHandles(item), at: point) {
+            return .handle(item.id, handle)
+        }
+        guard (state.crop ?? sourceRect).contains(point) else { return nil }
+        let item = state.annotations.reversed().first {
+            tool == .hand ? AnnotationCanvasGeometry.hit($0, at: point, tolerance: 5 / viewport.scale)
+                : AnnotationCanvasGeometry.hitForEditing($0, at: point, tolerance: 5 / viewport.scale)
+        }
+        return item.map { .item($0.id) }
     }
 
     // These source-pixel operations are shared by native events and focused behavior checks.
     func beginInteraction(at point: CGPoint, shift: Bool = false, clickCount: Int = 1) {
         finishTextEditing()
         let base = document.state
-        let editingTarget = base.annotations.reversed().first { AnnotationCanvasGeometry.hitForEditing($0, at: point, tolerance: 5 / viewport.scale) }
-        let moveTarget = tool == .hand ? topItem(at: point) : editingTarget
-        let isBrush = tool == .pen || tool == .highlighter
+        let target = editTarget(at: point)
         if isCropping {
             let crop = base.crop ?? sourceRect
             if let handle = hitHandle(AnnotationCanvasGeometry.handles(crop), at: point) {
@@ -351,10 +418,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             } else { gesture = Gesture(action: .cropCreate, start: clampedPoint(point), base: base) }
         } else if tool == .eraser {
             gesture = Gesture(action: .erase, start: point, base: base)
-        } else if let item = selectedAnnotation, let handle = hitHandle(selectionHandles(item), at: point) {
-            gesture = Gesture(action: .resize(item.id, handle), start: point, base: base, item: item)
-        } else if let item = moveTarget,
-                  tool == .hand || (selectedID == item.id && !isBrush) || (clickCount >= 2 && [.text, .bubble, .note].contains(item.kind)) {
+        } else if case .handle(let id, let handle) = target, let item = selectedAnnotation {
+            gesture = Gesture(action: .resize(id, handle), start: point, base: base, item: item)
+        } else if case .item(let id) = target, let item = base.annotations.first(where: { $0.id == id }) {
             selectedID = item.id
             if clickCount >= 2 && [.text, .bubble, .note].contains(item.kind) { beginTextEditing(item.id, isNew: false); return }
             gesture = Gesture(action: .move(item.id), start: point, base: base, item: item)
@@ -369,7 +435,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             if tool == .note { item.text = L("Note") }
             if tool == .step || tool == .stamp { item.rect = centeredRect(point, size: CGSize(width: style.size, height: style.size)) }
             selectedID = nil
-            gesture = Gesture(action: .create, start: point, base: base, item: item, clickTarget: editingTarget?.id)
+            gesture = Gesture(action: .create, start: point, base: base, item: item)
         }
         updateInteraction(to: point, shift: shift)
     }
@@ -381,9 +447,6 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         self.gesture = gesture
         switch gesture.action {
         case .create:
-            if gesture.clickTarget != nil && !gesture.didDrag {
-                preview = next; invalidateImage(); return
-            }
             guard var item = gesture.item else { return }
             if item.kind == .pen || item.kind == .highlighter {
                 if item.points.last != point { item.points.append(point) }
@@ -395,6 +458,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             }
             gesture.item = item; self.gesture = gesture; next.annotations.append(item)
         case .move(let id):
+            guard gesture.didDrag else { preview = next; invalidateImage(); return }
             guard let original = gesture.item, let index = next.annotations.firstIndex(where: { $0.id == id }) else { return }
             var item = original.translated(by: offset)
             if item.kind == .magnify && item.style.magnifierLinked {
@@ -403,8 +467,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             }
             next.annotations[index] = item
         case .resize(let id, let handle):
+            guard gesture.didDrag else { preview = next; invalidateImage(); return }
             guard let original = gesture.item, let index = next.annotations.firstIndex(where: { $0.id == id }) else { return }
-            var item = AnnotationCanvasGeometry.resized(original, handle: handle, to: point, shift: shift)
+            let anchor = AnnotationCanvasGeometry.selectionHandles(original).first { $0.0 == handle }?.1 ?? gesture.start
+            var item = AnnotationCanvasGeometry.resized(original, handle: handle, to: CGPoint(x: anchor.x + offset.width, y: anchor.y + offset.height), shift: shift)
             if item.kind == .magnify && item.style.magnifierLinked {
                 let sample = original.magnifierSource ?? CGPoint(x: original.rect.midX, y: original.rect.midY)
                 item.magnifierSource = CGPoint(x: sample.x + item.rect.midX - original.rect.midX, y: sample.y + item.rect.midY - original.rect.midY)
@@ -426,9 +492,6 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     func endInteraction() {
         guard let gesture, var next = preview else { self.gesture = nil; return }
         self.gesture = nil
-        if case .create = gesture.action, !gesture.didDrag, let target = gesture.clickTarget {
-            preview = nil; selectedID = target; invalidateImage(); return
-        }
         var newText: UUID?
         if case .create = gesture.action, var item = next.annotations.last {
             let isClick = item.rect.width < 1 && item.rect.height < 1
@@ -462,6 +525,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         window?.makeFirstResponder(self)
         beginInteraction(at: viewport.sourcePoint(point), shift: event.modifierFlags.contains(.shift), clickCount: event.clickCount)
         if tool == .hand && gesture == nil && editor == nil { isPanning = true; lastPan = point; NSCursor.closedHand.set() }
+        else { cursor(atView: point).set() }
     }
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -469,10 +533,12 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             viewport.origin.x += point.x - lastPan.x; viewport.origin.y += point.y - lastPan.y
             lastPan = point; fitted = true; updateEditorFrame(); invalidateImage()
         } else { updateInteraction(to: viewport.sourcePoint(point), shift: event.modifierFlags.contains(.shift)) }
+        cursor(atView: point).set()
     }
     override func mouseUp(with event: NSEvent) {
         if isPanning { isPanning = false; window?.invalidateCursorRects(for: self) }
         else { endInteraction() }
+        cursor(atView: convert(event.locationInWindow, from: nil)).set()
     }
     override func otherMouseDown(with event: NSEvent) { mouseDown(with: event) }
     override func otherMouseDragged(with event: NSEvent) { mouseDragged(with: event) }
@@ -486,7 +552,38 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
     }
     override func magnify(with event: NSEvent) { zoom(to: viewport.scale * (1 + event.magnification), anchor: convert(event.locationInWindow, from: nil)) }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: tool == .hand ? .openHand : .crosshair) }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self)
+        tracking = area; addTrackingArea(area)
+    }
+    func cursor(atView point: CGPoint) -> NSCursor {
+        if isPanning { return .closedHand }
+        if case .move = gesture?.action { return .closedHand }
+        if let editor, editor.frame.contains(point) { return .iBeam }
+        if !deleteButton.isHidden && deleteButton.frame.contains(point) { return .pointingHand }
+        if let content = window?.contentView, let hit = content.hitTest(convert(point, to: content)), hit !== self {
+            if hit is NSTextView || (hit as? NSTextField).map({ $0.isEditable || $0.isSelectable }) == true { return .iBeam }
+            return .arrow
+        }
+        switch editTarget(at: viewport.sourcePoint(point)) {
+        case .item: return .openHand
+        case .handle(_, let handle):
+            switch handle {
+            case .top, .bottom: return .resizeUpDown
+            case .left, .right: return .resizeLeftRight
+            default: return .crosshair
+            }
+        case nil: return tool == .hand && !isCropping ? .openHand : .crosshair
+        }
+    }
+    override func cursorUpdate(with event: NSEvent) { cursor(atView: convert(event.locationInWindow, from: nil)).set() }
+    override func mouseMoved(with event: NSEvent) { cursorUpdate(with: event) }
+    override func resetCursorRects() {
+        guard let window else { return }
+        cursor(atView: convert(window.mouseLocationOutsideOfEventStream, from: nil)).set()
+    }
 
     func editSelectedText() {
         guard let item = selectedAnnotation, [.text, .bubble, .note].contains(item.kind) else { return }

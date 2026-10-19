@@ -91,7 +91,9 @@ struct Annotation: Identifiable, Equatable, Codable {
             let tail = points.last ?? CGPoint(x: rect.midX, y: rect.maxY + 18)
             geometry = geometry.union(CGRect(origin: tail, size: .zero))
         }
-        return geometry.insetBy(dx: -max(style.lineWidth, 4) / 2, dy: -max(style.lineWidth, 4) / 2)
+        let width = kind == .highlighter ? max(style.lineWidth, 12) : style.lineWidth
+        let margin = max(width, [.pen, .highlighter].contains(kind) ? 1 : 4) / 2
+        return geometry.insetBy(dx: -margin, dy: -margin)
     }
     func translated(by offset: CGSize) -> Annotation {
         var result = self
@@ -119,9 +121,10 @@ struct Annotation: Identifiable, Equatable, Codable {
             return arrow.contains(point, style: style, tolerance: tolerance)
         }
         if [.pen, .highlighter, .line, .arrow].contains(kind) {
-            if points.count == 1 { return hypot(point.x - points[0].x, point.y - points[0].y) <= max(style.lineWidth / 2, tolerance) }
+            let width = kind == .highlighter ? max(style.lineWidth, 12) : style.lineWidth
+            if points.count == 1 { return hypot(point.x - points[0].x, point.y - points[0].y) <= max(width / 2, tolerance) }
             let path = points.count >= 2 ? points : [rect.origin, CGPoint(x: rect.maxX, y: rect.maxY)]
-            let radius = max(style.lineWidth / 2, tolerance)
+            let radius = max(width / 2, tolerance)
             for index in 1..<path.count {
                 let a = path[index - 1], b = path[index]
                 let dx = b.x - a.x, dy = b.y - a.y
