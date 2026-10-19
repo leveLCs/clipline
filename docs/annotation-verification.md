@@ -1,10 +1,10 @@
 # Clipline 0.3.0 標記驗證
 
-本紀錄區分可重跑的 production assertions／建置結果與主代理使用 CUA 的真實原生操作。原生測試只使用自行產生的 2400×1600 中英文字、RGB、棋盤與安全 QR fixture；沒有使用私人截圖。2026-10-20 已備份 0.2.0，於使用者正常退出後安裝並啟動 0.3.0；正式掛圖入口與退出保護的最後原生檢查仍待完成。
+本紀錄區分可重跑的 production assertions／建置結果與主代理使用 CUA 的真實原生操作。原生測試只使用自行產生的 2400×1600 中英文字、RGB、棋盤與安全 QR fixture；沒有使用私人截圖。2026-10-20 已備份 0.2.0，於使用者正常退出後安裝並啟動 0.3.0；正式掛圖長按入口、編輯器關閉保護與回存已驗收，未覆蓋項目列於文末。
 
 ## 程式與發行檢查
 
-Task 4 將 `Markup.shared.requestClose()` 接入 `applicationShouldTerminate`：拒絕關閉回傳 `terminateCancel`，保留／捨棄成功才回傳 `terminateNow`。既有 thumbnail `onSaved`、錄影 Trim、capture cancellation、Inbox 與信號還原路徑不變。此簡單映射與先前已使用同一 API 的 harness 一致，正式 App 的原生退出仍待主代理驗收。
+Task 4 將 `Markup.shared.requestClose()` 接入 `applicationShouldTerminate`：拒絕關閉回傳 `terminateCancel`，保留／捨棄成功才回傳 `terminateNow`。既有 thumbnail `onSaved`、錄影 Trim、capture cancellation、Inbox 與信號還原路徑不變。此映射與先前已使用同一 API 的 harness 一致；正式 App 的編輯器關閉已實測，但選單列「結束 Clipline」的整個程序退出仍未原生驗收。
 
 | 檢查 | 結果 |
 |---|---|
@@ -51,11 +51,20 @@ Task 4 將 `Markup.shared.requestClose()` 接入 `applicationShouldTerminate`：
 - 安裝版 binary SHA256 `b6e6369937674e8a91e360285a524e79949e75a7e2820fbd3dccc86cb99b22b9` 與已測試建置相同，嚴格 codesign 通過，程序路徑 `/Applications/Clipline.app/Contents/MacOS/Clipline`。舊版已備份到專案 `build/annotation-update-backup/`。
 - 安裝版 `/Applications/Clipline.app/Contents/Resources/ddddocr_worker.py` 與 source SHA 相同，既有獨立 Python runtime 實際回傳 `0123456789`。
 
-## 尚待主代理原生驗收
+### 正式安裝版入口與回存（2026-10-20）
+
+- 使用者長按自行產生的測試圖後，CUA 實際讀到「標記 — Clipline-Annotation-QA-20261020.png」；已確認透過正式掛圖入口開啟新版深色編輯器。
+- 在標題周圍拖曳紅色矩形，點「關閉」後出現保留／捨棄／取消提示；選取消後，原視窗與紅框保留，Undo 仍可用。
+- 點「完成並回存」後編輯器關閉；實際原檔為 2400×1600 PNG，保留紅框、不含選取 handles 或編輯器 UI。SHA256 由 `99f03617cca6bd2beb256e45eb3c8df1e5e14bf6604360db78e1c81417321039` 變為 `d29bc0901d86eae847f6062037409428b44d040b82e5ea206ec04918e79e6c2a`。本地證據保留於忽略版控的 `build/annotation-verification/installed-production-saved.png`。
+- 僅將該生成測試圖移回專案證據目錄；watcher 已自動移除測試掛圖，原有 3 張仍留在掛圖清單。正式 App 程序仍由 `/Applications/Clipline.app/Contents/MacOS/Clipline` 執行，binary SHA 與嚴格簽章再次確認未變。
+- 實際按兩次 ⌘Q 均沒有作用：正式 App 的退出快捷鍵只綁在 status menu，沒有 harness 的 `NSApp.mainMenu`。這不是退出保護通過的證據；本次沒有擴張成新增全域退出快捷鍵。
+- 先前已在系統設定確認 Clipline「登入時開啟」及 TextSniper 背景活動關閉；本次沒有修改這些設定。定期上游同步規則已納入新編輯器的保留與回歸要求。
+
+## 尚未覆蓋的原生驗收
 
 - 部分樣式／裁切比例預設目前只有 production assertions，未逐個原生操作。
 - 真實中文輸入法組字／候選視窗；目前中文證據是原生貼上與選取。
-- 最終 0.3.0 production App 的正常退出保護、掛圖長按入口、縮圖刷新，以及實際安裝後回歸。
+- 從正式 App 選單列「結束 Clipline」觸發的程序退出保護，以及回存後掛圖縮圖的視覺刷新。CUA 無法讀取透明掛圖列／選單列 UI；已驗證原檔回存與編輯器關閉保護，不能將它們替代這兩項觀察。
 - Intel 實機與 Intel ddddocr runtime。Universal binary／交叉編譯不能證明 Intel 原生操作已驗收。
 
-上述未驗項目不以編譯、交叉建置或單元測試代替；正式入口的原生結果會在觸發後補記。
+上述未驗項目不以編譯、交叉建置或單元測試代替。本紀錄也不宣稱已與 TrarrenShot 每項互動或像素完全一致。
