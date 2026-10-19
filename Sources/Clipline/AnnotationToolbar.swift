@@ -119,6 +119,10 @@ import AppKit
         target = self; self.action = #selector(run)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let editor = currentEditor() as? NSTextView, editor.performAnnotationTextCommand(with: event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
     @objc private func run() { changed(stringValue) }
 }
 

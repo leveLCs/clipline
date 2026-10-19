@@ -43,7 +43,9 @@ struct AnnotationTests {
             ("Native text composition and image copy routing", tests.canvasText),
             ("Canvas crop handles source sample and point clicks", tests.canvasHandles),
             ("Curved arrows select and erase visible geometry", tests.curvedArrowHit),
-            ("Shift crop remains square against source edges", tests.squareCropEdges)
+            ("Shift crop remains square against source edges", tests.squareCropEdges),
+            ("Arrow notes retain gesture direction and tail badges", tests.noteArrowGestures),
+            ("Fractional crop matches output through gestures and square edges", tests.fractionalCrop)
         ]
         for (name, run) in cases {
             let before = failures
@@ -260,6 +262,70 @@ struct AnnotationTests {
         canvas.setCrop(CGRect(x: 20, y: 30, width: 20, height: 20))
         canvas.beginInteraction(at: CGPoint(x: 20, y: 30)); canvas.updateInteraction(to: CGPoint(x: -100, y: -100), shift: true); canvas.endInteraction()
         expect(doc.state.crop == CGRect(x: 0, y: 10, width: 40, height: 40))
+    }
+
+    @MainActor func noteArrowGestures() throws {
+        let source = try fixture(width: 400, height: 300, alpha: true)
+        for variant in [AnnotationNoteStyle.solidArrow, .dashedArrow, .curvedArrow] {
+            for (a, b) in [(CGPoint(x: 300, y: 220), CGPoint(x: 70, y: 60)),
+                           (CGPoint(x: 70, y: 220), CGPoint(x: 300, y: 60))] {
+                let doc = AnnotationDocument(image: source), canvas = AnnotationCanvas(document: AnnotationDocument(image: source))
+                let drawing = AnnotationCanvas(document: doc)
+                drawing.selectTool(.note); drawing.style.noteStyle = variant
+                drawing.beginInteraction(at: a); drawing.updateInteraction(to: b); drawing.endInteraction(); drawing.finishTextEditing()
+                let note = try require(doc.state.annotations.first)
+                expect(note.points == [a, b])
+                let output = try doc.render(includeNotes: false)
+                let badge = pixel(output, Int(a.x + 10), Int(a.y))
+                expect(badge.r > 200 && badge.g > 200 && badge.a > 200)
+                expect(note.contains(CGPoint(x: a.x + 10, y: a.y), tolerance: 0))
+                expect(note.bounds.contains(CGPoint(x: a.x + 15, y: a.y)))
+                drawing.selectTool(.hand); drawing.selectedID = note.id
+                let end = CGPoint(x: b.x + 20, y: b.y + 30)
+                drawing.beginInteraction(at: b); drawing.updateInteraction(to: end); drawing.endInteraction()
+                expect(doc.state.annotations[0].points == [a, end])
+                var expected = note; expected.points = [a, end]; expected.rect = AnnotationCanvasGeometry.rect(from: a, to: end)
+                expect(try AnnotationRenderer.encode(doc.render(includeNotes: false)) == AnnotationRenderer.encode(AnnotationRenderer.render(source: source, state: AnnotationState(annotations: [expected]), includeNotes: false)))
+                canvas.selectTool(.note); canvas.style.noteStyle = variant
+                canvas.beginInteraction(at: a); canvas.updateInteraction(to: b, shift: true); canvas.endInteraction(); canvas.finishTextEditing()
+                expect(canvas.document.state.annotations[0].points == [a, AnnotationCanvasGeometry.constrained(b, from: a, line: true)])
+            }
+        }
+    }
+
+    @MainActor func fractionalCrop() throws {
+        let doc = AnnotationDocument(image: try fixture(width: 240, height: 180))
+        let canvas = AnnotationCanvas(document: AnnotationDocument(image: doc.source))
+        let drawing = AnnotationCanvas(document: doc)
+        canvas.frame = CGRect(x: 0, y: 0, width: 493, height: 381); canvas.fit()
+        drawing.frame = canvas.frame; drawing.fit()
+        expect(AnnotationCanvasGeometry.clampedCrop(CGRect(x: 10.3, y: 20.4, width: 0.4, height: 2), source: CGRect(x: 0, y: 0, width: 240, height: 180)) == nil)
+        drawing.setCrop(CGRect(x: 10.3, y: 20.4, width: 100.4, height: 70.2))
+        expect(doc.state.crop == CGRect(x: 10, y: 20, width: 101, height: 71))
+        func matchesOutput(_ state: AnnotationState) throws {
+            let frame = try require(state.crop), rendered = try AnnotationRenderer.render(source: doc.source, state: state)
+            expect(frame == frame.integral && frame.width == CGFloat(rendered.width) && frame.height == CGFloat(rendered.height))
+        }
+        try matchesOutput(doc.state)
+        drawing.isCropping = true
+        drawing.beginInteraction(at: CGPoint(x: 111, y: 91)); drawing.updateInteraction(to: CGPoint(x: 132.7, y: 112.2)); drawing.endInteraction()
+        try matchesOutput(doc.state)
+        drawing.beginInteraction(at: CGPoint(x: 50, y: 50)); drawing.updateInteraction(to: CGPoint(x: 50.4, y: 50.6)); drawing.endInteraction()
+        try matchesOutput(doc.state)
+        for (anchor, end) in [(CGPoint(x: 20.3, y: 30.7), CGPoint(x: 240, y: 180)),
+                              (CGPoint(x: 220.3, y: 150.7), CGPoint.zero),
+                              (CGPoint(x: 20.3, y: 150.7), CGPoint(x: 240, y: 0)),
+                              (CGPoint(x: 220.3, y: 30.7), CGPoint(x: 0, y: 180))] {
+            canvas.setCrop(nil); canvas.isCropping = true
+            let viewAnchor = canvas.viewPoint(fromSource: anchor)
+            canvas.beginInteraction(at: canvas.sourcePoint(fromView: viewAnchor)); canvas.updateInteraction(to: end, shift: true); canvas.endInteraction()
+            let crop = try require(canvas.document.state.crop)
+            expect(crop == crop.integral && crop.width == crop.height && CGRect(x: 0, y: 0, width: 240, height: 180).contains(crop))
+            try matchesOutput(canvas.document.state)
+            canvas.beginInteraction(at: CGPoint(x: crop.maxX, y: crop.maxY)); canvas.updateInteraction(to: CGPoint(x: 240, y: 180), shift: true); canvas.endInteraction()
+            let resized = try require(canvas.document.state.crop)
+            expect(resized == resized.integral && resized.width == resized.height)
+        }
     }
 
     @MainActor func history() throws {

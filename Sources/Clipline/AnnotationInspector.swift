@@ -98,11 +98,10 @@ import AppKit
             color(L("Background"), key: \.backgroundColor); color(L("Text color"), key: \.textColor)
         }
         if kind == .stamp {
-            let field = NSTextField(string: selected?.text ?? stamp); field.cell?.sendsActionOnEndEditing = true
-            field.placeholderString = L("Emoji or symbol"); field.widthAnchor.constraint(equalToConstant: 150).isActive = true
-            bind(field) { [weak self] control in
-                let text = (control as! NSTextField).stringValue; self?.currentText = text; self?.onStamp?(text)
+            let field = AnnotationField(selected?.text ?? stamp) { [weak self] text in
+                self?.currentText = text; self?.onStamp?(text)
             }
+            field.placeholderString = L("Emoji or symbol"); field.widthAnchor.constraint(equalToConstant: 150).isActive = true
             row(L("Stamp"), field)
             rows.addArrangedSubview(AnnotationButton(L("Search emoji and symbols"), symbol: nil) { NSApp.orderFrontCharacterPalette(nil) })
         }
@@ -115,10 +114,10 @@ import AppKit
             choice(L("Note style"), values: AnnotationNoteStyle.allCases, labels: [L("Solid frame"), L("Dashed frame"), L("Rounded frame"), L("Rounded dashed frame"), L("Solid arrow"), L("Dashed arrow"), L("Curved arrow")], key: \.noteStyle)
             slider(L("Note font size"), key: \.fontSize, range: 8...72)
             if let selected {
-                let field = NSTextField(string: selected.text); field.cell?.sendsActionOnEndEditing = true; field.widthAnchor.constraint(equalToConstant: 220).isActive = true
-                bind(field) { [weak self] control in
-                    let text = (control as! NSTextField).stringValue; self?.currentText = text; self?.onText?(text)
+                let field = AnnotationField(selected.text) { [weak self] text in
+                    self?.currentText = text; self?.onText?(text)
                 }
+                field.widthAnchor.constraint(equalToConstant: 220).isActive = true
                 row(L("Note text"), field)
             }
         }

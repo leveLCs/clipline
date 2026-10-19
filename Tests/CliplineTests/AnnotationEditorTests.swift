@@ -121,7 +121,66 @@ import Vision
         closing.insertText("Pending close text", replacementRange: NSRange(location: 0, length: closing.string.utf16.count))
         Markup.commitPendingEdits(canvas: noteCanvas, windows: [mainWindow, notesWindow])
         check(noteDocument.isDirty && noteDocument.state.annotations[0].text == "Pending close text", "close preparation includes auxiliary changes before dirty evaluation")
+        // Match the production LSUIElement app: no Edit menu and real NSTextField field editors.
+        let savedMenu = NSApp.mainMenu; NSApp.mainMenu = nil
+        defer { NSApp.mainMenu = savedMenu }
+        let routingRoot = NSView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let routingDoc = AnnotationDocument(image: image)
+        routingDoc.commit(state: AnnotationState(annotations: [note]), label: "Routing fixture")
+        let inspectorCanvas = AnnotationCanvas(document: routingDoc)
+        inspectorCanvas.frame = CGRect(x: 0, y: 0, width: 400, height: 600)
+        let routingInspector = AnnotationInspector(frame: CGRect(x: 410, y: 0, width: 380, height: 600))
+        routingRoot.addSubview(inspectorCanvas); routingRoot.addSubview(routingInspector)
+        mainWindow.contentView = routingRoot
+        var imageCopies = 0; inspectorCanvas.onCopy = { imageCopies += 1 }
+        let copyKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: mainWindow.windowNumber, context: nil, characters: "c", charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8)!
+        for kind in [AnnotationKind.note, .stamp] {
+            routingInspector.configure(kind: kind, style: note.style, selected: kind == .note ? note : nil, stamp: "Emoji original")
+            let field = descendants(routingInspector).compactMap { $0 as? NSTextField }.first { $0.isEditable }!
+            field.selectText(nil)
+            let editor = field.currentEditor() as! NSTextView
+            assert(mainWindow.firstResponder === editor && NSApp.mainMenu == nil)
+            editor.setSelectedRange(NSRange(location: 0, length: 4))
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString("unchanged sentinel", forType: .string)
+            _ = mainWindow.performKeyEquivalent(with: copyKey)
+            check(NSPasteboard.general.string(forType: .string) == String(editor.string.prefix(4)) && imageCopies == 0, "no-menu inspector selected text copy: \(kind)")
+            let original = editor.string
+            editor.insertText("Replacement", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+            editor.breakUndoCoalescing()
+            _ = mainWindow.performKeyEquivalent(with: undoKey)
+            check(editor.string == original && routingDoc.state.annotations.count == 1, "no-menu inspector native undo: \(kind)")
+            _ = mainWindow.performKeyEquivalent(with: redoKey)
+            check(editor.string == "Replacement", "no-menu inspector native redo: \(kind)")
+            editor.setSelectedRange(NSRange(location: 0, length: 0))
+            _ = mainWindow.performKeyEquivalent(with: copyKey)
+            check(imageCopies == 0, "empty inspector text selection does not copy image: \(kind)")
+            mainWindow.makeFirstResponder(inspectorCanvas)
+        }
+        overviewField.selectText(nil)
+        let overviewEditor = overviewField.currentEditor() as! NSTextView
+        overviewEditor.setSelectedRange(NSRange(location: 0, length: 7))
+        NSPasteboard.general.clearContents()
+        _ = notesWindow.performKeyEquivalent(with: copyKey)
+        check(NSPasteboard.general.string(forType: .string) == String(overviewEditor.string.prefix(7)), "no-menu auxiliary note native selected-text copy")
+        let overviewOriginal = overviewEditor.string
+        overviewEditor.insertText("Auxiliary replacement", replacementRange: NSRange(location: 0, length: overviewEditor.string.utf16.count)); overviewEditor.breakUndoCoalescing()
+        _ = notesWindow.performKeyEquivalent(with: undoKey)
+        check(overviewEditor.string == overviewOriginal, "no-menu auxiliary note native undo")
+        _ = notesWindow.performKeyEquivalent(with: redoKey)
+        check(overviewEditor.string == "Auxiliary replacement", "no-menu auxiliary note native redo")
+        mainWindow.makeFirstResponder(inspectorCanvas)
+        imageCopies = 0
+        _ = mainWindow.performKeyEquivalent(with: copyKey)
+        check(imageCopies == 1, "image copy shortcut remains active outside text fields")
+        let exportPanel = NSSavePanel()
+        exportPanel.nameFieldStringValue = "native-tools.png"
+        Markup.configureExportPanel(exportPanel, type: .jpeg)
+        check(exportPanel.allowedContentTypes == [.jpeg] && ["jpg", "jpeg"].contains(URL(fileURLWithPath: exportPanel.nameFieldStringValue).pathExtension), "JPEG selector synchronizes allowed type and default filename")
+        exportPanel.nameFieldStringValue = "custom.name.jpg"
+        Markup.configureExportPanel(exportPanel, type: .png)
+        check(exportPanel.allowedContentTypes == [.png] && exportPanel.nameFieldStringValue == "custom.name.png", "PNG selector replaces the JPEG suffix and preserves the base name")
         if regressions > 0 { exit(1) }
+        print("PASS no-menu inspector and auxiliary field editors copy/undo/redo; PNG/JPEG panel filenames match format")
         print("PASS pending overview text reaches rendered/saved output and dirty close; keyboard undo/redo refreshes inspector")
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

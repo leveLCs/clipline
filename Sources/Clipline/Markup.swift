@@ -201,7 +201,9 @@ import UniformTypeIdentifiers
         commitPendingEdits()
         let panel = NSSavePanel(); panel.title = L("Save image as"); panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = (document.sourceURL?.deletingPathExtension().lastPathComponent ?? L("Annotated image")) + "-annotated.png"
-        let format = AnnotationPopup(["PNG", "JPEG"]) { [weak panel] index in panel?.allowedContentTypes = [index == 0 ? .png : .jpeg] }
+        let format = AnnotationPopup(["PNG", "JPEG"]) { [weak panel] index in
+            if let panel { Self.configureExportPanel(panel, type: index == 0 ? .png : .jpeg) }
+        }
         panel.accessoryView = format
         guard panel.runModal() == .OK, let target = panel.url else { return }
         do {
@@ -216,6 +218,14 @@ import UniformTypeIdentifiers
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
             status?.stringValue = L("Image saved")
         } catch { showError(error) }
+    }
+    static func configureExportPanel(_ panel: NSSavePanel, type: UTType) {
+        panel.allowedContentTypes = [type]
+        let name = URL(fileURLWithPath: panel.nameFieldStringValue)
+        if UTType(filenameExtension: name.pathExtension)?.conforms(to: type) != true,
+           let suffix = type.preferredFilenameExtension {
+            panel.nameFieldStringValue = name.deletingPathExtension().lastPathComponent + "." + suffix
+        }
     }
     static func isOriginalDestination(_ target: URL, source: URL) -> Bool {
         if target.resolvingSymlinksInPath().standardizedFileURL == source.resolvingSymlinksInPath().standardizedFileURL { return true }

@@ -71,6 +71,11 @@ struct Annotation: Identifiable, Equatable, Codable {
     var style: AnnotationStyle = AnnotationStyle()
     var magnifierSource: CGPoint? = nil
 
+    var isDirectional: Bool {
+        kind == .line || kind == .arrow || (kind == .note && [.solidArrow, .dashedArrow, .curvedArrow].contains(style.noteStyle))
+    }
+    var noteBadgeCenter: CGPoint { isDirectional ? (points.first ?? rect.origin) : rect.origin }
+
     var bounds: CGRect {
         var geometry: CGRect
         if let arrow = AnnotationArrowGeometry(self) {
@@ -81,7 +86,7 @@ struct Annotation: Identifiable, Equatable, Codable {
         if kind == .step {
             geometry = CGRect(x: rect.midX - style.size / 2, y: rect.midY - style.size / 2, width: style.size, height: style.size)
         } else if kind == .note {
-            geometry = geometry.union(CGRect(x: rect.minX - style.size / 2, y: rect.minY - style.size / 2, width: style.size, height: style.size))
+            geometry = geometry.union(CGRect(x: noteBadgeCenter.x - style.size / 2, y: noteBadgeCenter.y - style.size / 2, width: style.size, height: style.size))
         } else if kind == .bubble {
             let tail = points.last ?? CGPoint(x: rect.midX, y: rect.maxY + 18)
             geometry = geometry.union(CGRect(origin: tail, size: .zero))
@@ -110,7 +115,7 @@ struct Annotation: Identifiable, Equatable, Codable {
     }
     func contains(_ point: CGPoint, tolerance: CGFloat = 4) -> Bool {
         if let arrow = AnnotationArrowGeometry(self) {
-            if kind == .note && hypot(point.x - rect.minX, point.y - rect.minY) <= style.size / 2 + tolerance { return true }
+            if kind == .note && hypot(point.x - noteBadgeCenter.x, point.y - noteBadgeCenter.y) <= style.size / 2 + tolerance { return true }
             return arrow.contains(point, style: style, tolerance: tolerance)
         }
         if [.pen, .highlighter, .line, .arrow].contains(kind) {

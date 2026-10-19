@@ -255,7 +255,7 @@ enum AnnotationRenderer {
             styled.style.filled = false
             shape(path: box(item.rect.standardized, style: styled.style.boxStyle, radius: styled.style.cornerRadius), style: styled.style, context: context)
         }
-        badge("\(number)", center: item.rect.origin, style: item.style, context: context)
+        badge("\(number)", center: item.noteBadgeCenter, style: item.style, context: context)
     }
     private static func spotlight(_ items: [Annotation], crop: CGRect, context: CGContext) {
         context.saveGState()

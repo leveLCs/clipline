@@ -37,9 +37,10 @@ enum AnnotationCanvasGeometry {
         return CGPoint(x: anchor.x + (dx < 0 ? -side : side), y: anchor.y + (dy < 0 ? -side : side))
     }
     static func created(kind: AnnotationKind, from a: CGPoint, to point: CGPoint, style: AnnotationStyle, shift: Bool) -> Annotation {
-        let b = shift ? constrained(point, from: a, line: kind == .line || kind == .arrow) : point
-        var item = Annotation(kind: kind, rect: rect(from: a, to: b), style: style)
-        if kind == .line || kind == .arrow { item.points = [a, b] }
+        var item = Annotation(kind: kind, style: style)
+        let b = shift ? constrained(point, from: a, line: item.isDirectional) : point
+        item.rect = rect(from: a, to: b)
+        if item.isDirectional { item.points = [a, b] }
         if kind == .pen || kind == .highlighter { item.points = [a, b] }
         if kind == .magnify { item.magnifierSource = a }
         return item
@@ -85,7 +86,7 @@ enum AnnotationCanvasGeometry {
         guard rect.origin.x.isFinite, rect.origin.y.isFinite, rect.width.isFinite, rect.height.isFinite else { return nil }
         let crop = rect.standardized.intersection(source)
         guard !crop.isNull, crop.width >= 1, crop.height >= 1 else { return nil }
-        return crop
+        return crop.integral.intersection(source)
     }
     static func squareCrop(from anchor: CGPoint, to point: CGPoint, source: CGRect) -> CGRect? {
         let dx = point.x - anchor.x, dy = point.y - anchor.y
@@ -93,7 +94,12 @@ enum AnnotationCanvasGeometry {
         let availableY = dy < 0 ? anchor.y - source.minY : source.maxY - anchor.y
         let side = max(0, min(max(abs(dx), abs(dy)), availableX, availableY))
         let end = CGPoint(x: anchor.x + (dx < 0 ? -side : side), y: anchor.y + (dy < 0 ? -side : side))
-        return clampedCrop(rect(from: anchor, to: end), source: source)
+        guard let crop = clampedCrop(rect(from: anchor, to: end), source: source) else { return nil }
+        // Outward rounding each axis can differ by one pixel; expand both to the same bounded side.
+        let pixels = min(max(crop.width, crop.height), source.width, source.height)
+        return CGRect(x: max(source.minX, min(source.maxX - pixels, dx < 0 ? ceil(anchor.x) - pixels : floor(anchor.x))),
+                      y: max(source.minY, min(source.maxY - pixels, dy < 0 ? ceil(anchor.y) - pixels : floor(anchor.y))),
+                      width: pixels, height: pixels)
     }
     static func resizedCrop(_ crop: CGRect, handle: AnnotationHandle, to point: CGPoint, shift: Bool, source: CGRect) -> CGRect? {
         if shift {
@@ -110,8 +116,8 @@ enum AnnotationCanvasGeometry {
         return clampedCrop(resizedRect(crop, handle: handle, to: point, shift: false), source: source)
     }
     static func movedCrop(_ crop: CGRect, by offset: CGSize, source: CGRect) -> CGRect {
-        CGRect(x: max(source.minX, min(source.maxX - crop.width, crop.minX + offset.width)),
-               y: max(source.minY, min(source.maxY - crop.height, crop.minY + offset.height)), width: crop.width, height: crop.height)
+        CGRect(x: max(source.minX, min(source.maxX - crop.width, (crop.minX + offset.width).rounded())),
+               y: max(source.minY, min(source.maxY - crop.height, (crop.minY + offset.height).rounded())), width: crop.width, height: crop.height)
     }
     static func hit(_ item: Annotation, at point: CGPoint, tolerance: CGFloat) -> Bool {
         if item.kind == .ellipse || item.kind == .magnify {
@@ -297,7 +303,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
     }
     private func selectionHandles(_ item: Annotation) -> [(AnnotationHandle, CGPoint)] {
-        if item.kind == .line || item.kind == .arrow {
+        if item.isDirectional {
             let points = item.points.count >= 2 ? item.points : [item.rect.origin, CGPoint(x: item.rect.maxX, y: item.rect.maxY)]
             return [(.start, points[0]), (.end, points[points.count - 1])]
         }
@@ -401,13 +407,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             if isClick && item.kind != .pen && item.kind != .highlighter {
                 guard clickCreatesShapes else { preview = nil; invalidateImage(); return }
                 let size = CGSize(width: max(40, min(180, sourceRect.width / 3)), height: max(30, min(90, sourceRect.height / 4)))
-                if item.kind == .line || item.kind == .arrow {
+                if item.isDirectional {
                     item.points = [gesture.start, CGPoint(x: gesture.start.x + size.width, y: gesture.start.y)]
                     item.rect = AnnotationCanvasGeometry.rect(from: item.points[0], to: item.points[1])
                 } else { item.rect = CGRect(origin: gesture.start, size: size) }
             }
-            if item.rect.width < 1 && ![.line, .arrow, .pen, .highlighter].contains(item.kind) { item.rect.size.width = 1 }
-            if item.rect.height < 1 && ![.line, .arrow, .pen, .highlighter].contains(item.kind) { item.rect.size.height = 1 }
+            if item.rect.width < 1 && !item.isDirectional && ![.pen, .highlighter].contains(item.kind) { item.rect.size.width = 1 }
+            if item.rect.height < 1 && !item.isDirectional && ![.pen, .highlighter].contains(item.kind) { item.rect.size.height = 1 }
             next.annotations[next.annotations.count - 1] = item
             selectedID = item.id
             if [.text, .bubble, .note].contains(item.kind) { newText = item.id }
@@ -509,7 +515,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     }
     override func cancelOperation(_ sender: Any?) { escape() }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if let editor, window?.firstResponder === editor { return editor.performKeyEquivalent(with: event) }
+        if let text = window?.firstResponder as? NSTextView {
+            if text === editor { return text.performKeyEquivalent(with: event) }
+            return text.performAnnotationTextCommand(with: event)
+        }
         guard event.modifierFlags.intersection([.command, .option, .control]).contains(.command),
               !event.modifierFlags.contains(.option), !event.modifierFlags.contains(.control) else { return super.performKeyEquivalent(with: event) }
         switch event.charactersIgnoringModifiers?.lowercased() {
@@ -537,23 +546,29 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
 private final class AnnotationTextView: NSTextView {
     weak var owner: AnnotationCanvas?
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard !hasMarkedText() else { return super.performKeyEquivalent(with: event) }
-        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        guard modifiers.contains(.command), !modifiers.contains(.control), !modifiers.contains(.option) else { return super.performKeyEquivalent(with: event) }
-        switch event.charactersIgnoringModifiers?.lowercased() {
-        case "a": selectAll(nil)
-        case "c":
-            if selectedRange().length > 0 { copy(nil) }
-            else { owner?.requestCopy() }
-        case "x": cut(nil)
-        case "v": pasteAsPlainText(nil)
-        case "z": modifiers.contains(.shift) ? undoManager?.redo() : undoManager?.undo()
-        default: return super.performKeyEquivalent(with: event)
-        }
-        return true
+        if performAnnotationTextCommand(with: event, emptyCopy: { [weak self] in self?.owner?.requestCopy() }) { return true }
+        return super.performKeyEquivalent(with: event)
     }
     override func cancelOperation(_ sender: Any?) {
         if hasMarkedText() { super.cancelOperation(sender) }
         else { owner?.finishTextEditing() }
+    }
+}
+
+@MainActor extension NSTextView {
+    /// Accessory applications have no Edit menu to dispatch field-editor commands.
+    func performAnnotationTextCommand(with event: NSEvent, emptyCopy: (() -> Void)? = nil) -> Bool {
+        guard !hasMarkedText() else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard modifiers.contains(.command), !modifiers.contains(.control), !modifiers.contains(.option) else { return false }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "a": selectAll(nil)
+        case "c": if selectedRange().length > 0 || emptyCopy == nil { copy(nil) } else { emptyCopy?() }
+        case "x": cut(nil)
+        case "v": pasteAsPlainText(nil)
+        case "z": modifiers.contains(.shift) ? undoManager?.redo() : undoManager?.undo()
+        default: return false
+        }
+        return true
     }
 }
