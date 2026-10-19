@@ -13,7 +13,8 @@
 - [x] Add CaptureController.swift for one in-flight ScreenCaptureKit session, per-display snapshots and overlay windows. Implement native mouse/flags/Esc events, current-mode feedback, cancellation on display change, pixel crop, OCR completion and private PNG output.
 - [x] Modify HotKey.swift to per-registration IDs. In AppDelegate.swift add capture action/menu/conflict retry; pass explicit source rect to existing hangCapture, suppress line while selecting, and reveal explicit captures over full screen. Independent code review covered shortcut dispatch/removal and capture cleanup.
 - [x] Build with scripts/build-app.sh, run scripts/test.sh and scripts/check-strings.swift. Verify Info.plist, universal architectures and codesign.
-- [ ] Exercise actual shortcuts, both capture modes and cancellation in the running app.
+- [x] Exercise the actual capture shortcut and both capture modes in the running app; the user confirmed OCR paste and Command-held hanging both work.
+- [ ] Verify Esc preserves the clipboard, card restoration after reopening, multiple physical displays and full-screen Spaces in the running app.
 - [x] Commit/push reviewed source to the authorized fork, branch `codex/capture-ocr`.
 
 ## Verification commands
@@ -32,4 +33,6 @@ Runtime checks: use synthetic visible Chinese/English fixture with native ⌘⇧
 - All 70 localization keys match across 12 languages, including the new complete Traditional Chinese localization.
 - Release app built for arm64 and x86_64; strict codesign verification passed with local ad-hoc signing.
 - Independent source review found no blocking issue. Runtime event delivery, multiple physical displays and full-screen Spaces remain separate from geometry/unit-test coverage.
-- The user granted screen-recording access and opened region capture. The running app's full-screen overlay and Traditional Chinese mode instructions were visually verified. The UI driver then reported that the app state changed during its drag attempt; neither an OCR clipboard result nor a hung screenshot was confirmed in that attempt. End-to-end OCR, Command-held hanging and Esc cancellation remain pending manual confirmation.
+- The user granted screen-recording access and opened region capture. The running app's full-screen overlay and Traditional Chinese mode instructions were visually verified. The UI driver then reported that the app state changed during its drag attempt, so that attempt did not establish either end-to-end result.
+- The user subsequently tested both requested flows and explicitly confirmed "兩項都正常": Command-Shift-2 followed by a normal selection produces OCR text that can be pasted; holding Command until mouse-up hangs the screenshot at the top. This is user-confirmed native acceptance, separate from the automated core checks.
+- Esc clipboard preservation, restoration after reopening, multiple physical displays and full-screen Spaces have not yet been verified in the running app.
