@@ -30,7 +30,17 @@ struct AnnotationTests {
             ("Geometry transforms preserve fixed samples and hit bounds", tests.geometry),
             ("Twenty effects finish within one pass budget", tests.effectBudget),
             ("Rectangle spotlight uses corner radius", tests.spotlightCorners),
-            ("Invalid geometry fails safely", tests.invalid)
+            ("Invalid geometry fails safely", tests.invalid),
+            ("Canvas source transforms and pointer zoom roundtrip", tests.canvasCoordinates),
+            ("Canvas reverse drag Shift and crop geometry", tests.canvasGeometry),
+            ("Canvas degenerate lines and point pen hit geometry", tests.canvasDegenerate),
+            ("Canvas gestures create every tool and commit once", tests.canvasGestures),
+            ("Canvas move magnifier resize crop and history", tests.canvasEditing),
+            ("Badge background and text color share style semantics", tests.badgeColors),
+            ("Renderer throwing effects restore caller clipping", tests.throwingEffects),
+            ("Blur and pixelation change high contrast source pixels", tests.patternMasks),
+            ("Native text composition and image copy routing", tests.canvasText),
+            ("Canvas crop handles source sample and point clicks", tests.canvasHandles)
         ]
         for (name, run) in cases {
             let before = failures
@@ -39,6 +49,177 @@ struct AnnotationTests {
         }
         print("\(cases.count) checks; \(failures) failures")
         if failures > 0 { exit(1) }
+    }
+
+    func canvasCoordinates() throws {
+        var transform = AnnotationViewport(scale: 0.375, origin: CGPoint(x: 31, y: 74))
+        let pixel = CGPoint(x: 2003, y: 1507)
+        let view = transform.viewPoint(pixel)
+        expect(hypot(transform.sourcePoint(view).x - pixel.x, transform.sourcePoint(view).y - pixel.y) < 0.00001)
+        transform.zoom(to: 1.7, anchor: view)
+        expect(hypot(transform.viewPoint(pixel).x - view.x, transform.viewPoint(pixel).y - view.y) < 0.00001)
+        // NSView points, including a Retina backing conversion, never multiply source pixels twice.
+        let backing = CGPoint(x: view.x * 2, y: view.y * 2)
+        expect(AnnotationViewport(scale: 0.375, origin: CGPoint(x: 31, y: 74)).sourcePoint(CGPoint(x: backing.x / 2, y: backing.y / 2)) == pixel)
+    }
+    func canvasGeometry() throws {
+        let a = CGPoint(x: 80, y: 70), b = CGPoint(x: 10, y: 20)
+        let arrow = AnnotationCanvasGeometry.created(kind: .arrow, from: a, to: b, style: AnnotationStyle(), shift: false)
+        expect(arrow.points == [a, b] && arrow.rect == CGRect(x: 10, y: 20, width: 70, height: 50))
+        let square = AnnotationCanvasGeometry.created(kind: .rectangle, from: a, to: b, style: AnnotationStyle(), shift: true)
+        expect(square.rect == CGRect(x: 10, y: 0, width: 70, height: 70))
+        let diagonal = AnnotationCanvasGeometry.constrained(b, from: a, line: true)
+        expect(abs(abs(diagonal.x - a.x) - abs(diagonal.y - a.y)) < 0.0001)
+        let source = CGRect(x: 0, y: 0, width: 100, height: 80)
+        expect(AnnotationCanvasGeometry.clampedCrop(CGRect(x: -20, y: -10, width: 80, height: 50), source: source) == CGRect(x: 0, y: 0, width: 60, height: 40))
+        expect(AnnotationCanvasGeometry.movedCrop(CGRect(x: 10, y: 10, width: 60, height: 40), by: CGSize(width: 100, height: -100), source: source) == CGRect(x: 40, y: 0, width: 60, height: 40))
+    }
+    func canvasDegenerate() throws {
+        let line = Annotation(kind: .arrow, rect: CGRect(x: 10, y: 20, width: 70, height: 0), points: [CGPoint(x: 80, y: 20), CGPoint(x: 10, y: 20)])
+        let resized = AnnotationCanvasGeometry.resized(line, handle: .end, to: CGPoint(x: 10, y: 70), shift: false)
+        expect(resized.points == [CGPoint(x: 80, y: 20), CGPoint(x: 10, y: 70)])
+        let vertical = Annotation(kind: .line, rect: CGRect(x: 10, y: 20, width: 0, height: 70), points: [CGPoint(x: 10, y: 20), CGPoint(x: 10, y: 90)])
+        expect(AnnotationCanvasGeometry.resized(vertical, handle: .start, to: CGPoint(x: 30, y: 25), shift: false).points.first == CGPoint(x: 30, y: 25))
+        let dot = Annotation(kind: .pen, points: [CGPoint(x: 75, y: 60)])
+        expect(dot.contains(CGPoint(x: 75, y: 60)) && !dot.contains(.zero))
+    }
+    @MainActor func canvasGestures() throws {
+        let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+        let canvas = AnnotationCanvas(document: doc)
+        var changes = 0
+        canvas.onDocumentChanged = { changes += 1 }
+        for kind in AnnotationKind.allCases where kind != .hand && kind != .eraser {
+            canvas.selectTool(kind)
+            canvas.beginInteraction(at: CGPoint(x: 20, y: 20))
+            canvas.updateInteraction(to: CGPoint(x: 120, y: 90))
+            canvas.updateInteraction(to: CGPoint(x: 150, y: 110))
+            expect(changes == doc.state.annotations.count)
+            canvas.endInteraction()
+            canvas.finishTextEditing()
+            expect(doc.state.annotations.last?.kind == kind)
+        }
+        expect(changes == 14 && doc.state.annotations.count == 14)
+        canvas.undo(); expect(doc.state.annotations.count == 13)
+        canvas.redo(); expect(doc.state.annotations.count == 14)
+        canvas.selectedID = nil
+        canvas.selectTool(.eraser)
+        canvas.beginInteraction(at: CGPoint(x: 50, y: 50)); canvas.endInteraction()
+        expect(doc.state.annotations.count == 13)
+    }
+    @MainActor func canvasEditing() throws {
+        let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+        let canvas = AnnotationCanvas(document: doc)
+        var item = Annotation(kind: .magnify, rect: CGRect(x: 100, y: 100, width: 80, height: 80), magnifierSource: CGPoint(x: 40, y: 40))
+        doc.commit(state: AnnotationState(annotations: [item]), label: "Fixture")
+        canvas.selectTool(.hand)
+        canvas.beginInteraction(at: CGPoint(x: 140, y: 140)); canvas.updateInteraction(to: CGPoint(x: 160, y: 150)); canvas.endInteraction()
+        expect(doc.state.annotations[0].rect.origin == CGPoint(x: 120, y: 110) && doc.state.annotations[0].magnifierSource == CGPoint(x: 40, y: 40))
+        canvas.undo(); item.style.magnifierLinked = true
+        doc.commit(state: AnnotationState(annotations: [item]), label: "Linked")
+        canvas.beginInteraction(at: CGPoint(x: 140, y: 140)); canvas.updateInteraction(to: CGPoint(x: 160, y: 150)); canvas.endInteraction()
+        expect(doc.state.annotations[0].magnifierSource == CGPoint(x: 60, y: 50))
+        canvas.setCrop(CGRect(x: -10, y: 20, width: 100, height: 60))
+        expect(doc.state.crop == CGRect(x: 0, y: 20, width: 90, height: 60))
+        canvas.undo(); expect(doc.state.crop == nil)
+        canvas.duplicateSelection(); expect(doc.state.annotations.count == 2)
+        canvas.deleteSelection(); expect(doc.state.annotations.count == 1)
+    }
+
+    func badgeColors() throws {
+        for kind in [AnnotationKind.step, .note] {
+            var style = AnnotationStyle(); style.backgroundColor = AnnotationColor(.blue); style.textColor = AnnotationColor(.green); style.size = 36
+            let image = try AnnotationRenderer.render(source: fixture(width: 100, height: 100), state: AnnotationState(annotations: [Annotation(kind: kind, rect: CGRect(x: 40, y: 40, width: 20, height: 20), style: style)]), includeNotes: false)
+            let center = kind == .step ? 50 : 40
+            var greens = 0, blues = 0
+            for y in (center - 16)...(center + 16) { for x in (center - 16)...(center + 16) {
+                let p = pixel(image, x, y)
+                if p.g > 180 && p.r < 80 && p.b < 80 { greens += 1 }
+                if p.b > 180 && p.r < 80 && p.g < 80 { blues += 1 }
+            } }
+            expect(greens > 10 && blues > 100)
+        }
+    }
+    func throwingEffects() throws {
+        let source = try fixture(width: 40000, height: 4)
+        for kind in [AnnotationKind.pixelate, .magnify] {
+            let ctx = try require(CGContext(data: nil, width: 100, height: 100, bitsPerComponent: 8, bytesPerRow: 400,
+                                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            ctx.clip(to: CGRect(x: 2, y: 2, width: 90, height: 90))
+            let original = ctx.boundingBoxOfClipPath
+            var style = AnnotationStyle(); style.zoom = 1
+            let item = Annotation(kind: kind, rect: CGRect(x: 0, y: 0, width: 35000, height: 4), style: style, magnifierSource: CGPoint(x: 17500, y: 2))
+            expectThrows { try AnnotationRenderer.draw(source: source, state: AnnotationState(annotations: [item]), in: ctx) }
+            expect(ctx.boundingBoxOfClipPath == original)
+            ctx.setFillColor(NSColor.green.cgColor); ctx.fill(CGRect(x: 20, y: 20, width: 10, height: 10))
+            expect(pixel(try require(ctx.makeImage()), 25, 75).g > 200)
+        }
+    }
+    func patternMasks() throws {
+        let ctx = try require(CGContext(data: nil, width: 80, height: 60, bitsPerComponent: 8, bytesPerRow: 320,
+                                        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        for y in 0..<15 { for x in 0..<20 {
+            ctx.setFillColor((x + y) % 2 == 0 ? NSColor.black.cgColor : NSColor.white.cgColor)
+            ctx.fill(CGRect(x: x * 4, y: y * 4, width: 4, height: 4))
+        } }
+        let source = try require(ctx.makeImage())
+        for mode in [AnnotationMaskStyle.pixelate, .blur] {
+            var style = AnnotationStyle(); style.maskStyle = mode; style.pixelSize = 11; style.blurRadius = 3; style.lineWidth = 0
+            let image = try AnnotationRenderer.render(source: source, state: AnnotationState(annotations: [Annotation(kind: .pixelate, rect: CGRect(x: 8, y: 8, width: 64, height: 44), style: style)]))
+            var changed = 0
+            for y in 15..<45 { for x in 15..<65 { if abs(Int(pixel(image, x, y).r) - Int(pixel(source, x, y).r)) > 30 { changed += 1 } } }
+            expect(changed > 100)
+            expect(pixel(source, 2, 2).r == pixel(image, 2, 2).r)
+        }
+    }
+
+    @MainActor func canvasText() throws {
+        let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+        let canvas = AnnotationCanvas(document: doc)
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 600), styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = canvas
+        defer { window.contentView = nil }
+        canvas.selectTool(.text); canvas.beginInteraction(at: CGPoint(x: 50, y: 50)); canvas.endInteraction()
+        expect(canvas.isEditingText && doc.state.annotations.isEmpty)
+        let text = try require(canvas.subviews.compactMap { $0 as? NSTextView }.first)
+        text.setMarkedText("注音", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        expect(text.hasMarkedText() && doc.state.annotations.isEmpty)
+        text.insertText("正體中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        canvas.finishTextEditing()
+        expect(doc.state.annotations.count == 1 && doc.state.annotations[0].text == "正體中文")
+        canvas.undo(); expect(doc.state.annotations.isEmpty)
+        canvas.redo(); canvas.selectedID = doc.state.annotations[0].id; canvas.editSelectedText()
+        let second = try require(canvas.subviews.compactMap { $0 as? NSTextView }.first)
+        second.setSelectedRange(NSRange(location: 0, length: 0))
+        var copies = 0; canvas.onCopy = { copies += 1 }
+        let commandC = try require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil, characters: "c", charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8))
+        expect(second.performKeyEquivalent(with: commandC))
+        expect(copies == 1 && !canvas.isEditingText)
+    }
+    @MainActor func canvasHandles() throws {
+        let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+        let canvas = AnnotationCanvas(document: doc)
+        let sample = Annotation(kind: .magnify, rect: CGRect(x: 200, y: 200, width: 100, height: 100), magnifierSource: CGPoint(x: 60, y: 60))
+        doc.commit(state: AnnotationState(annotations: [sample]), label: "Fixture")
+        canvas.selectedID = sample.id
+        canvas.beginInteraction(at: CGPoint(x: 60, y: 60)); canvas.updateInteraction(to: CGPoint(x: 90, y: 80)); canvas.endInteraction()
+        expect(doc.state.annotations[0].magnifierSource == CGPoint(x: 90, y: 80) && doc.state.annotations[0].rect == sample.rect)
+        canvas.beginInteraction(at: CGPoint(x: 300, y: 300)); canvas.updateInteraction(to: CGPoint(x: 350, y: 350)); canvas.endInteraction()
+        expect(doc.state.annotations[0].rect == CGRect(x: 200, y: 200, width: 150, height: 150))
+        expect(doc.state.annotations[0].magnifierSource == CGPoint(x: 90, y: 80))
+        canvas.setCrop(CGRect(x: 100, y: 100, width: 200, height: 200)); canvas.isCropping = true
+        canvas.beginInteraction(at: CGPoint(x: 300, y: 300)); canvas.updateInteraction(to: CGPoint(x: 900, y: 700)); canvas.endInteraction()
+        expect(doc.state.crop == CGRect(x: 100, y: 100, width: 700, height: 500))
+        canvas.undo(); expect(doc.state.crop == CGRect(x: 100, y: 100, width: 200, height: 200))
+        canvas.beginInteraction(at: CGPoint(x: 150, y: 150)); canvas.updateInteraction(to: CGPoint(x: -500, y: -500)); canvas.endInteraction()
+        expect(doc.state.crop == CGRect(x: 0, y: 0, width: 200, height: 200))
+        canvas.setCrop(nil); canvas.selectTool(.step); canvas.clickCreatesShapes = false
+        canvas.beginInteraction(at: CGPoint(x: 400, y: 400)); canvas.endInteraction()
+        expect(doc.state.annotations.last?.kind == .step && doc.state.annotations.last?.rect.width == canvas.style.size)
+        canvas.selectTool(.rectangle); canvas.beginInteraction(at: CGPoint(x: 400, y: 400)); canvas.endInteraction()
+        expect(doc.state.annotations.count == 2)
+        canvas.clickCreatesShapes = true; canvas.beginInteraction(at: CGPoint(x: 400, y: 400)); canvas.endInteraction()
+        expect(doc.state.annotations.count == 3 && doc.state.annotations.last!.rect.width > 1)
     }
 
     @MainActor func history() throws {

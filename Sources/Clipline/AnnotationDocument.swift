@@ -108,6 +108,7 @@ struct Annotation: Identifiable, Equatable, Codable {
     }
     func contains(_ point: CGPoint, tolerance: CGFloat = 4) -> Bool {
         if [.pen, .highlighter, .line, .arrow].contains(kind) {
+            if points.count == 1 { return hypot(point.x - points[0].x, point.y - points[0].y) <= max(style.lineWidth / 2, tolerance) }
             let path = points.count >= 2 ? points : [rect.origin, CGPoint(x: rect.maxX, y: rect.maxY)]
             let radius = max(style.lineWidth / 2, tolerance)
             for index in 1..<path.count {

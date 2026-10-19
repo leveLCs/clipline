@@ -39,10 +39,12 @@ enum AnnotationRenderer {
         let height = Int(crop.height + appendix.height)
         let context = try bitmap(width: Int(crop.width), height: height, source: source)
         context.translateBy(x: 0, y: CGFloat(height)); context.scaleBy(x: 1, y: -1)
-        context.saveGState()
-        context.translateBy(x: -crop.minX, y: -crop.minY)
-        try draw(source: source, state: state, in: context)
-        context.restoreGState()
+        do {
+            context.saveGState()
+            defer { context.restoreGState() }
+            context.translateBy(x: -crop.minX, y: -crop.minY)
+            try draw(source: source, state: state, in: context)
+        }
         if !notes.isEmpty {
             context.setFillColor(NSColor.white.cgColor)
             context.fill(CGRect(x: 0, y: crop.height, width: crop.width, height: appendix.height))
@@ -70,6 +72,7 @@ enum AnnotationRenderer {
         var spotlightDrawn = false
         for (index, item) in state.annotations.enumerated() {
             context.saveGState()
+            defer { context.restoreGState() }
             context.setAlpha(item.style.opacity)
             context.setStrokeColor(item.style.color.nsColor.cgColor)
             context.setFillColor(item.style.color.nsColor.cgColor)
@@ -121,7 +124,6 @@ enum AnnotationRenderer {
             case .note:
                 note(item, number: state.noteNumber(for: item.id) ?? 1, context: context)
             }
-            context.restoreGState()
         }
     }
 
@@ -239,11 +241,12 @@ enum AnnotationRenderer {
     }
     private static func badge(_ text: String, center: CGPoint, style: AnnotationStyle, context: CGContext) {
         let rect = CGRect(x: center.x - style.size / 2, y: center.y - style.size / 2, width: style.size, height: style.size)
-        context.setFillColor(style.color.nsColor.cgColor); context.fillEllipse(in: rect)
+        context.setFillColor(style.backgroundColor.nsColor.cgColor); context.fillEllipse(in: rect)
+        context.setStrokeColor(style.color.nsColor.cgColor); context.strokeEllipse(in: rect)
         let font = NSFont.boldSystemFont(ofSize: style.size * 0.58)
         let size = (text as NSString).size(withAttributes: [.font: font])
         drawText(text, in: CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2, width: size.width + 1, height: size.height + 1),
-                 font: font, color: style.backgroundColor.nsColor, context: context)
+                 font: font, color: style.textColor.nsColor, context: context)
     }
     private static func note(_ item: Annotation, number: Int, context: CGContext) {
         var styled = item
@@ -321,22 +324,24 @@ enum AnnotationRenderer {
         if item.style.magnifierLinked {
             stroke(points: [center, CGPoint(x: rect.midX, y: rect.midY)], context: context)
         }
-        context.saveGState()
-        context.addEllipse(in: rect); context.clip()
-        context.setFillColor(item.style.backgroundColor.nsColor.cgColor); context.fill(rect)
-        let image: CGImage?
-        if let cached = pass.effects[index] { image = cached }
-        else {
-            image = try region(sample, source: source, prior: prior, crop: crop, pass: pass)
-            if let image { pass.effects[index] = image }
+        do {
+            context.saveGState()
+            defer { context.restoreGState() }
+            context.addEllipse(in: rect); context.clip()
+            context.setFillColor(item.style.backgroundColor.nsColor.cgColor); context.fill(rect)
+            let image: CGImage?
+            if let cached = pass.effects[index] { image = cached }
+            else {
+                image = try region(sample, source: source, prior: prior, crop: crop, pass: pass)
+                if let image { pass.effects[index] = image }
+            }
+            if let image {
+                let dest = CGRect(x: rect.minX + (clipped.minX - sample.minX) * item.style.zoom,
+                                  y: rect.minY + (clipped.minY - sample.minY) * item.style.zoom,
+                                  width: clipped.width * item.style.zoom, height: clipped.height * item.style.zoom)
+                drawImage(image, in: dest, context: context)
+            }
         }
-        if let image {
-            let dest = CGRect(x: rect.minX + (clipped.minX - sample.minX) * item.style.zoom,
-                              y: rect.minY + (clipped.minY - sample.minY) * item.style.zoom,
-                              width: clipped.width * item.style.zoom, height: clipped.height * item.style.zoom)
-            drawImage(image, in: dest, context: context)
-        }
-        context.restoreGState()
         if item.style.lineWidth > 0 { context.strokeEllipse(in: rect) }
     }
     private static func noteLayout(_ notes: [Annotation], width: CGFloat, state: AnnotationState) -> (height: CGFloat, entries: [(text: String, rect: CGRect)]) {
