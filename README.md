@@ -60,11 +60,37 @@ The complete test suite includes the 11 capture/OCR checks, annotation model/ren
 ```sh
 scripts/test.sh
 swift scripts/check-strings.swift
+/usr/bin/python3 Tests/SigningTests.py
 scripts/build-app.sh
-open build/Clipline.app
 ```
 
-The app bundle contains Apple silicon and Intel binaries. The optional runtime was tested on Apple silicon with macOS 26.5.1; its Intel installation has not been verified. Local builds use ad-hoc signing unless a signing identity is supplied; they are not Apple-notarized. Rebuilding may require granting screen-recording permission again.
+The app bundle contains Apple silicon and Intel binaries. The optional runtime was tested on Apple silicon with macOS 26.5.1; its Intel installation has not been verified.
+
+### Fixed signing identity for local updates
+
+Release and debug app builds require a configured Apple code-signing identity in the macOS Keychain. There is no ad-hoc fallback. For this Mac's local use, create an Apple Development certificate in Xcode Settings → Apple Accounts → your authorized team → Manage Certificates. Keep its private key in Keychain; never commit or export it into this repository.
+
+Initialize once with the certificate's 40-character fingerprint from `security find-identity -v -p codesigning` and an existing Clipline bundle:
+
+```sh
+/usr/bin/python3 scripts/signing.py configure CERTIFICATE_FINGERPRINT /Applications/Clipline.app
+```
+
+This signs and validates a temporary copy, leaving the supplied app untouched. Only the public fingerprint and designated requirement (DR) are saved in `~/Library/Application Support/Clipline/Signing/identity.json`, shared across checkouts/worktrees. `SIGN_IDENTITY` cannot override this pin. `CLIPLINE_SIGNING_CONFIG` is available for isolated tests; normal builds and updates must use the default configuration.
+
+`scripts/build-app.sh` checks the identity before compiling or replacing an existing build. A missing, expired, or inaccessible certificate stops the build. Signing uses Apple's default DR, then checks the exact pinned DR, certificate, bundle identifier, resources, and every architecture. Updates must run this before replacing the installed app:
+
+```sh
+/usr/bin/python3 scripts/signing.py verify-update build/Clipline.app /Applications/Clipline.app
+```
+
+Both apps must pass the fixed identity checks and satisfy each other's DR. Altered files, another signer, weaker/different DRs, and ad-hoc builds are rejected. Keep the installation path `/Applications/Clipline.app` and the bundle ID unchanged. Back up the installed app, quit normally, install the tested bundle, restart, and verify the installed bundle again. Do not run a development copy from another path as the permission-retention acceptance test.
+
+The first migration from an ad-hoc build intentionally cannot pass `verify-update`. Perform it explicitly after a `signing.py verify` check and backup; macOS may require one new screen-recording grant. Recurring updates must never bypass `verify-update`, reset TCC, or silently replace the identity. Certificate renewal is a separate explicit operation: verify the new certificate's DR against the stored DR and installed app before changing the fingerprint and migrating. Do not delete the configuration to work around a failed check. Switching from Apple Development to Developer ID may change the DR and require new permission.
+
+Apple Development signing here is for local use, not notarized distribution. A matching signature is a prerequisite for retaining TCC access, not proof that macOS will never show a privacy reminder. Verify one real update and screen capture after the initial authorization. `Tests/SigningTests.py` uses real `codesign`; positive cases are marked skipped if no identity is configured, which is not sufficient for an update approval.
+
+本機建置、更新及權限保留的實測紀錄見 [固定簽章驗證](docs/signing-verification.md)。
 
 ## Attribution and license
 

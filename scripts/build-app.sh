@@ -4,10 +4,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Fail before replacing an existing build if the fixed identity is unavailable.
+/usr/bin/python3 scripts/signing.py preflight
+
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$PWD/.build/ModuleCache}"
 CONFIG="${1:-release}"
 APP="build/Clipline.app"
-VERSION="0.3.0"
+VERSION="0.3.1"
 
 # Builds one architecture and prints the binary's path.
 # The Command Line Tools for macOS 27 ship an SDK whose SwiftUI needs a macro
@@ -71,7 +74,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>Clipline</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleVersion</key><string>2</string>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleLocalizations</key><array>${LANGUAGES}</array>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -87,10 +90,5 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Local builds are ad-hoc signed. Supply SIGN_IDENTITY explicitly for distribution.
-if [ -n "${SIGN_IDENTITY:-}" ] && [ "$SIGN_IDENTITY" != "-" ]; then
-  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
-else
-  codesign --force --deep --sign - "$APP" >/dev/null
-fi
+/usr/bin/python3 scripts/signing.py sign "$APP"
 echo "Built $APP"
