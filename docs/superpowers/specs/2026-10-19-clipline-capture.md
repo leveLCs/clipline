@@ -6,6 +6,8 @@
 
 OCR 使用 Vision accurate，優先正體中文與英文。本機處理、不存 OCR 圖片；成功且有文字才更新剪貼簿。取消、無文字、辨識失敗保留剪貼簿。以短暫提示回報成功／無文字，權限與錯誤提供可理解訊息。
 
+0.2.0：一般框選保留 Vision，mouseUp 時按住 Option 改用 ddddocr 1.6.1 預設模型，Command 優先掛圖。模式共用 CaptureMode，HUD 即時更新。ddddocr 採獨立本機 Python 程序，stdin 傳 PNG、stdout 回 JSON；禁止將 OCR 影像落盤，錯誤不退回 Vision、不覆寫剪貼簿。固定版本 runtime 與完整 Python 裝在 Application Support，worker 隨 App 打包；15 秒逾時、取消時終止並回收程序。內部設計審查已涵蓋 runtime 路徑獨立、pipe、取消、錯誤與按鍵優先序。
+
 圖片存獨立 Clipline/Screenshots 目錄，檔案僅擁有者可讀寫，直接接到 hangCapture 並傳入選取範圍；主動掛圖可在全螢幕 App 顯示。保留既有清除、拖曳與恢復生命週期。避免 watcher 重複接收同檔。
 
 固定擷取熱鍵與既有可調整的掛圖列熱鍵分開註冊；衝突可重試且保留選單入口，不自行修改 TextSniper 設定。獨立 bundle ID io.github.leveLCs.Clipline，不讀寫原 App 偏好與資料。保留 MIT 原作授權，替換原品牌、圖示及未授權文件圖片。

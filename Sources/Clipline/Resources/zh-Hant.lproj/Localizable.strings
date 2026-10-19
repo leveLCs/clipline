@@ -8,7 +8,6 @@
 "As many as fit" = "依螢幕寬度";
 "Bring the line down" = "顯示掛圖列的時機";
 "Capture shortcut is unavailable" = "擷取快捷鍵已被佔用";
-"Capture text" = "擷取文字";
 "Capture text or image" = "擷取文字或圖片";
 "Change Shortcut" = "變更快捷鍵";
 "Change Shortcut…" = "變更快捷鍵…";
@@ -20,7 +19,6 @@
 "Could not capture" = "無法完成擷取";
 "Could not change the login setting" = "無法變更登入設定";
 "Discard" = "丟棄";
-"Drag to capture text. Hold Command to hang an image. Escape cancels." = "拖曳擷取文字；按住 ⌘ 掛起圖片；Esc 取消。";
 "Escape cancels. Delete removes the shortcut." = "Esc 取消；Delete 移除快捷鍵。";
 "Handle screenshots" = "接管系統截圖";
 "Hang copied images" = "掛起複製的圖片";
@@ -69,3 +67,11 @@
 "Watch" = "監看";
 "When something new hangs" = "新增掛圖時";
 "When the pointer rests in the menu bar" = "游標停在選單列時";
+"Capture text (Apple Vision)" = "擷取文字（Apple Vision）";
+"Capture text (ddddocr)" = "擷取文字（ddddocr）";
+"Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel" = "框選：Apple Vision · ⌥：ddddocr · ⌘：掛圖 · Esc：取消";
+"ddddocr is unavailable. Reinstall its local runtime, or capture without Option to use Apple Vision." = "ddddocr 無法使用。請重新安裝它的本機執行環境，或不按 ⌥，使用 Apple Vision 擷取。";
+"ddddocr could not recognize this image. The clipboard was not changed." = "ddddocr 無法辨識這張圖片，已保留原剪貼簿。";
+"ddddocr timed out. Try a smaller selection." = "ddddocr 辨識逾時，請嘗試縮小框選範圍。";
+"Capture cancelled." = "已取消擷取。";
+"Recognizing text (ddddocr). Escape cancels." = "正在辨識文字（ddddocr），Esc 取消。";

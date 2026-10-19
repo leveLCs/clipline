@@ -1,9 +1,17 @@
 import AppKit
 
+enum CaptureMode {
+    case vision, ddddocr, hang
+
+    init(modifiers: NSEvent.ModifierFlags) {
+        self = modifiers.contains(.command) ? .hang : modifiers.contains(.option) ? .ddddocr : .vision
+    }
+}
+
 struct CaptureSelection {
     let rect: CGRect
     let pixelRect: CGRect
-    let hang: Bool
+    let mode: CaptureMode
 
     init?(start: CGPoint, end: CGPoint, screenFrame: CGRect, pixelSize: CGSize,
           modifiers: NSEvent.ModifierFlags) {
@@ -21,6 +29,6 @@ struct CaptureSelection {
                            y: (screenFrame.maxY - area.maxY) * sy,
                            width: area.width * sx, height: area.height * sy)
             .integral.intersection(CGRect(origin: .zero, size: pixelSize))
-        hang = modifiers.contains(.command)
+        mode = CaptureMode(modifiers: modifiers)
     }
 }

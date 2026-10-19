@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$PWD/.build/ModuleCache}"
 CONFIG="${1:-release}"
 APP="build/Clipline.app"
-VERSION="0.1.0"
+VERSION="0.2.0"
 
 # Builds one architecture and prints the binary's path.
 # The Command Line Tools for macOS 27 ship an SDK whose SwiftUI needs a macro
@@ -37,6 +37,7 @@ BIN="$OUT/Clipline"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Clipline"
+cp Sources/Clipline/Resources/ddddocr_worker.py "$APP/Contents/Resources/"
 
 # Icon
 WORK="$(mktemp -d)"

@@ -257,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler {
+                self.capture.cancel()
                 if Inbox.isEnabled { Inbox.restore() }
                 exit(0)
             }
@@ -679,7 +680,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         captureItem.keyEquivalent = "2"
         captureItem.keyEquivalentModifierMask = [.command, .shift]
-        captureItem.toolTip = L("Drag to capture text. Hold Command to hang an image. Escape cancels.")
+        captureItem.toolTip = L("Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel")
         captureItem.isEnabled = !capture.isActive
         menu.addItem(captureItem)
         if captureHotKey == nil {

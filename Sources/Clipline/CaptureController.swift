@@ -8,6 +8,7 @@ final class CaptureController {
     private(set) var isActive = false
     private var session = UUID()
     private var task: Task<Void, Never>?
+    private var ddddOCR: DdddOCR?
     private var panels: [SelectionPanel] = []
     private var keyMonitor: Any?
     private var displayObserver: Any?
@@ -73,6 +74,7 @@ final class CaptureController {
     func cancel() {
         guard isActive else { return }
         task?.cancel()
+        ddddOCR?.cancel()
         finish()
     }
 
@@ -105,7 +107,8 @@ final class CaptureController {
                 return nil
             }
             for panel in self.panels {
-                (panel.contentView as? SelectionView)?.commandDown = event.modifierFlags.contains(.command)
+                guard let view = panel.contentView as? SelectionView, !view.isRecognizing else { continue }
+                view.mode = CaptureMode(modifiers: event.modifierFlags)
             }
             return event
         }
@@ -122,11 +125,18 @@ final class CaptureController {
             return
         }
         let current = session
-        removeOverlays()
+        if selection.mode == .ddddocr {
+            // Keep keyboard focus and cancellation observers while the slower worker runs.
+            for panel in panels { (panel.contentView as? SelectionView)?.isRecognizing = true }
+        } else {
+            removeOverlays()
+        }
+        let worker = selection.mode == .ddddocr ? DdddOCR() : nil
+        ddddOCR = worker
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                if selection.hang {
+                if selection.mode == .hang {
                     let url = try await Task.detached(priority: .userInitiated) {
                         try CaptureStorage.save(crop)
                     }.value
@@ -135,7 +145,8 @@ final class CaptureController {
                     self.onImage?(url, selection.rect)
                 } else {
                     let text = try await Task.detached(priority: .userInitiated) {
-                        try TextRecognition.recognize(crop)
+                        if let worker { return try worker.recognize(crop) }
+                        return try TextRecognition.recognize(crop)
                     }.value
                     guard self.session == current else { return }
                     let copied = TextRecognition.copy(text)
@@ -166,6 +177,7 @@ final class CaptureController {
         removeOverlays()
         session = UUID()
         task = nil
+        ddddOCR = nil
         isActive = false
         onActiveChanged?()
     }
@@ -218,7 +230,13 @@ private final class SelectionView: NSView {
     let image: CGImage
     var onCancel: (() -> Void)?
     var onSelect: ((CGPoint, CGPoint, NSEvent.ModifierFlags) -> Void)?
-    var commandDown = NSEvent.modifierFlags.contains(.command) { didSet { needsDisplay = true } }
+    var mode = CaptureMode(modifiers: NSEvent.modifierFlags) { didSet { needsDisplay = true } }
+    var isRecognizing = false {
+        didSet {
+            mode = .ddddocr
+            setAccessibilityLabel(L("Recognizing text (ddddocr). Escape cancels."))
+        }
+    }
     private var start: CGPoint?
     private var end: CGPoint?
 
@@ -227,7 +245,7 @@ private final class SelectionView: NSView {
         super.init(frame: frame)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel(L("Drag to capture text. Hold Command to hang an image. Escape cancels."))
+        setAccessibilityLabel(L("Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel"))
     }
     required init?(coder: NSCoder) { nil }
     override var acceptsFirstResponder: Bool { true }
@@ -236,19 +254,21 @@ private final class SelectionView: NSView {
     override func cancelOperation(_ sender: Any?) { onCancel?() }
 
     override func mouseDown(with event: NSEvent) {
+        guard !isRecognizing else { return }
         window?.makeKey()
         start = convert(event.locationInWindow, from: nil)
         end = start
-        commandDown = event.modifierFlags.contains(.command)
+        mode = CaptureMode(modifiers: event.modifierFlags)
         needsDisplay = true
     }
     override func mouseDragged(with event: NSEvent) {
+        guard !isRecognizing else { return }
         end = convert(event.locationInWindow, from: nil)
-        commandDown = event.modifierFlags.contains(.command)
+        mode = CaptureMode(modifiers: event.modifierFlags)
         needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) {
-        guard let start, let window else { return }
+        guard !isRecognizing, let start, let window else { return }
         let end = convert(event.locationInWindow, from: nil)
         onSelect?(window.convertPoint(toScreen: convert(start, to: nil)),
                   window.convertPoint(toScreen: convert(end, to: nil)), event.modifierFlags)
@@ -269,11 +289,16 @@ private final class SelectionView: NSView {
         if let selection {
             let outline = NSBezierPath(rect: selection)
             outline.lineWidth = 2
-            (commandDown ? NSColor.systemMint : .white).setStroke()
+            (mode == .hang ? NSColor.systemMint : .white).setStroke()
             outline.stroke()
         }
-        let title = commandDown ? L("Hang image") : L("Capture text")
-        let hint = L("Drag to capture text. Hold Command to hang an image. Escape cancels.")
+        let title: String
+        switch mode {
+        case .vision: title = L("Capture text (Apple Vision)")
+        case .ddddocr: title = isRecognizing ? L("Recognizing text (ddddocr). Escape cancels.") : L("Capture text (ddddocr)")
+        case .hang: title = L("Hang image")
+        }
+        let hint = L("Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel")
         let width = min(620, bounds.width - 40)
         let box = CGRect(x: (bounds.width - width) / 2, y: bounds.height - 112, width: width, height: 68)
         NSColor.black.withAlphaComponent(0.78).setFill()
@@ -282,7 +307,7 @@ private final class SelectionView: NSView {
         paragraph.alignment = .center
         (title as NSString).draw(in: CGRect(x: box.minX + 10, y: box.minY + 35, width: width - 20, height: 24),
             withAttributes: [.font: NSFont.systemFont(ofSize: 17, weight: .semibold),
-                             .foregroundColor: commandDown ? NSColor.systemMint : .white, .paragraphStyle: paragraph])
+                             .foregroundColor: mode == .hang ? NSColor.systemMint : .white, .paragraphStyle: paragraph])
         (hint as NSString).draw(in: CGRect(x: box.minX + 12, y: box.minY + 10, width: width - 24, height: 20),
             withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.white,
                              .paragraphStyle: paragraph])
