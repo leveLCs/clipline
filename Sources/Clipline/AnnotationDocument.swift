@@ -236,16 +236,18 @@ final class AnnotationDocument {
             removeTemp = false
             if let current = try? FileVersion.read(url), current.sameContentAndIdentity(as: installed),
                renameatx_np(AT_FDCWD, temp.path, AT_FDCWD, url.path, UInt32(RENAME_SWAP)) == 0 {
-                removeTemp = true
+                // The rollback itself can race another replacement: only discard our own output.
+                removeTemp = (try? installed.installedVersion(at: temp)) != nil
             }
             throw AnnotationFailure.changedSource
         }
-        self.original = try FileVersion.read(url)
+        // Never adopt an external post-swap replacement as our next overwrite baseline.
+        self.original = try installed.installedVersion(at: url)
         savedState = state; onChange?()
     }
 }
 
-private struct FileVersion: Equatable {
+struct FileVersion: Equatable {
     let device: dev_t
     let inode: ino_t
     let modifiedSeconds: Int
@@ -268,6 +270,11 @@ private struct FileVersion: Equatable {
         return FileVersion(device: after.st_dev, inode: after.st_ino,
                            modifiedSeconds: after.st_mtimespec.tv_sec, modifiedNanos: after.st_mtimespec.tv_nsec,
                            changedSeconds: after.st_ctimespec.tv_sec, changedNanos: after.st_ctimespec.tv_nsec, bytes: bytes)
+    }
+    func installedVersion(at url: URL) throws -> FileVersion {
+        let current = try FileVersion.read(url)
+        guard current.sameContentAndIdentity(as: self) else { throw AnnotationFailure.changedSource }
+        return current
     }
     func sameContentAndIdentity(as other: FileVersion) -> Bool {
         device == other.device && inode == other.inode && bytes == other.bytes

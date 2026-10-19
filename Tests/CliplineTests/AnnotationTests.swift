@@ -1,6 +1,7 @@
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers
+import Darwin
 
 @main
 struct AnnotationTests {
@@ -15,6 +16,8 @@ struct AnnotationTests {
             ("Transparent and Display P3 rendering", tests.color),
             ("Changed deleted replaced sources refuse overwrite", tests.conflicts),
             ("Cancel writes nothing and private atomic output", tests.cancel),
+            ("Rollback keeps a concurrently displaced foreign version", tests.rollbackVersion),
+            ("Saved baseline accepts only this installed file", tests.installedBaseline),
             ("Spotlight overlap is a union", tests.spotlight),
             ("Three masks use earlier composited pixels", tests.masks),
             ("Magnifier independent source and crop privacy", tests.magnifier),
@@ -183,6 +186,61 @@ struct AnnotationTests {
             let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
             expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
             expectThrows { try AnnotationDocument(image: fixture()).saveOriginal() }
+        }
+    }
+
+    func rollbackVersion() throws {
+        try withFolder { folder in
+            let target = folder.appendingPathComponent("target")
+            let temp = folder.appendingPathComponent("temp")
+            let installedBytes = Data("our encoded output".utf8)
+            let displacedBytes = Data("first external version".utf8)
+            let laterBytes = Data("second external version".utf8)
+            // The rollback precheck sees our output, then another writer replaces it before RENAME_SWAP.
+            try installedBytes.write(to: target)
+            let installed = try FileVersion.read(target)
+            _ = try installed.installedVersion(at: target)
+            try displacedBytes.write(to: temp)
+            try laterBytes.write(to: target, options: .atomic)
+            expect(renameatx_np(AT_FDCWD, temp.path, AT_FDCWD, target.path, UInt32(RENAME_SWAP)) == 0)
+            if (try? installed.installedVersion(at: temp)) != nil { try FileManager.default.removeItem(at: temp) }
+            expect(try Data(contentsOf: target) == displacedBytes)
+            expect(FileManager.default.fileExists(atPath: temp.path))
+            if FileManager.default.fileExists(atPath: temp.path) { expect(try Data(contentsOf: temp) == laterBytes) }
+
+            // Without the intervening writer the rollback temp really is ours and can be removed.
+            let ownTarget = folder.appendingPathComponent("own-target")
+            let ownTemp = folder.appendingPathComponent("own-temp")
+            try installedBytes.write(to: ownTarget)
+            let own = try FileVersion.read(ownTarget)
+            try displacedBytes.write(to: ownTemp)
+            expect(renameatx_np(AT_FDCWD, ownTemp.path, AT_FDCWD, ownTarget.path, UInt32(RENAME_SWAP)) == 0)
+            if (try? own.installedVersion(at: ownTemp)) != nil { try FileManager.default.removeItem(at: ownTemp) }
+            expect(!FileManager.default.fileExists(atPath: ownTemp.path))
+            expect(try Data(contentsOf: ownTarget) == displacedBytes)
+        }
+    }
+
+    func installedBaseline() throws {
+        try withFolder { folder in
+            let target = folder.appendingPathComponent("target")
+            let bytes = Data("our encoded output".utf8)
+            try bytes.write(to: target)
+            let installed = try FileVersion.read(target)
+            expect(try installed.installedVersion(at: target).sameContentAndIdentity(as: installed))
+            let external = Data("external post-swap replacement".utf8)
+            let writer = try FileHandle(forWritingTo: target)
+            try writer.truncate(atOffset: 0); try writer.write(contentsOf: external); try writer.close()
+            expectThrows { _ = try installed.installedVersion(at: target) }
+            expect(try Data(contentsOf: target) == external)
+            try external.write(to: target, options: .atomic)
+            expectThrows { _ = try installed.installedVersion(at: target) }
+            expect(try Data(contentsOf: target) == external)
+            // Matching bytes on a different inode still belong to another writer.
+            try bytes.write(to: target, options: .atomic)
+            expectThrows { _ = try installed.installedVersion(at: target) }
+            try FileManager.default.removeItem(at: target)
+            expectThrows { _ = try installed.installedVersion(at: target) }
         }
     }
 
