@@ -1,6 +1,8 @@
 # Clipline 擷取設計
 
-使用者已核准：⌘⇧2 框選 OCR，放開滑鼠時按住 ⌘ 則掛上截圖；名稱與圖示由實作者決定。名稱 Clipline，原創深藍底薄荷色框選與文字圖示。
+使用者已核准：⌘⇧2 框選 OCR，放開滑鼠時按住 ⌃ Ctrl 則掛上截圖；名稱與圖示由實作者決定。名稱 Clipline，原創深藍底薄荷色框選與文字圖示。
+
+0.3.2（2026-10-20）：使用者指定 Ctrl 取代 Command 作為掛圖修飾鍵。Ctrl 優先於 Option，Command 不再切換掛圖；⌘⇧2 開始框選及 Option ddddocr 沿用原設定。所有模式提示與選取結果共用 `CaptureMode`，同步 HUD、輔助使用標籤、選單提示、空白掛圖列與上游更新規則。
 
 保留原 AppKit / SwiftUI 掛圖功能與 macOS 14 支援。以 ScreenCaptureKit 取得各螢幕靜態畫面，再顯示 AppKit 框選面板；選取鎖定起始螢幕，超出邊界時裁切，第一版不跨螢幕拼接。依實際影像像素尺寸換算 Retina 座標，完成時判斷 mouseUp.modifierFlags。Esc、螢幕配置變更與擷取失敗都清除面板；同一時間只執行一次擷取。
 

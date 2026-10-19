@@ -8,11 +8,11 @@ Select text. Hang screenshots. A native macOS 14+ menu bar app, independently mo
 |---|---|
 | `⌘⇧2`，放開快捷鍵後拖曳框選 | Apple Vision OCR，文字直接複製到剪貼簿 |
 | 框選時按住 `⌥`，直到放開滑鼠 | 改用 ddddocr OCR |
-| 框選時按住 `⌘`，直到放開滑鼠 | 將截圖掛到螢幕上方 |
+| 框選時按住 `⌃ Ctrl`，直到放開滑鼠 | 將截圖掛到螢幕上方 |
 | `Esc` | 取消，保留原剪貼簿 |
 | `⌃⌥T` | 顯示／隱藏掛圖列，可在選單修改 |
 
-Apple Vision 優先辨識正體中文與英文；ddddocr 使用 1.6.1 預設模型。放開滑鼠時決定模式，`⌘` 優先於 `⌥`。框選上方會顯示目前模式。
+Apple Vision 優先辨識正體中文與英文；ddddocr 使用 1.6.1 預設模型。放開滑鼠時決定模式，`⌃ Ctrl` 優先於 `⌥`；`⌘` 不切換掛圖模式。框選上方會顯示目前模式。
 
 兩種 OCR 都在本機處理，不上傳影像，也不儲存 OCR 用的截圖。無文字或錯誤時不清除原剪貼簿，ddddocr 失敗時不會自動切回 Vision。掛圖保留點擊複製、長按標記、雙擊預覽與拖曳分享。
 
@@ -84,7 +84,7 @@ This signs and validates a temporary copy, leaving the supplied app untouched. O
 /usr/bin/python3 scripts/signing.py verify-update build/Clipline.app /Applications/Clipline.app
 ```
 
-Both apps must pass the fixed identity checks and satisfy each other's DR. Altered files, another signer, weaker/different DRs, and ad-hoc builds are rejected. Keep the installation path `/Applications/Clipline.app` and the bundle ID unchanged. Back up the installed app, quit normally, install the tested bundle, restart, and verify the installed bundle again. Do not run a development copy from another path as the permission-retention acceptance test.
+Both apps must pass the fixed identity checks and satisfy each other's DR. Altered files, another signer, weaker/different DRs, and ad-hoc builds are rejected. Keep the installation path `/Applications/Clipline.app` and the bundle ID unchanged. Back up the installed app, quit normally, install the tested bundle, restart, and verify the installed bundle again. Request a normal quit through `NSRunningApplication.terminate()` and confirm the process has exited; preserve any unsaved-edit prompt instead of force-quitting or routinely asking the user to quit manually. Do not run a development copy from another path as the permission-retention acceptance test.
 
 The first migration from an ad-hoc build intentionally cannot pass `verify-update`. Perform it explicitly after a `signing.py verify` check and backup; macOS may require one new screen-recording grant. Recurring updates must never bypass `verify-update`, reset TCC, or silently replace the identity. Certificate renewal is a separate explicit operation: verify the new certificate's DR against the stored DR and installed app before changing the fingerprint and migrating. Do not delete the configuration to work around a failed check. Switching from Apple Development to Developer ID may change the DR and require new permission.
 

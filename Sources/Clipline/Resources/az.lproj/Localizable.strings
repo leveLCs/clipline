@@ -81,7 +81,7 @@
 "Text copied" = "Text copied";
 "Capture text (Apple Vision)" = "Capture text (Apple Vision)";
 "Capture text (ddddocr)" = "Capture text (ddddocr)";
-"Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel" = "Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel";
+"Drag: Apple Vision · ⌥: ddddocr · ⌃: Hang image · Esc: Cancel" = "Drag: Apple Vision · ⌥: ddddocr · ⌃: Hang image · Esc: Cancel";
 "ddddocr is unavailable. Reinstall its local runtime, or capture without Option to use Apple Vision." = "ddddocr is unavailable. Reinstall its local runtime, or capture without Option to use Apple Vision.";
 "ddddocr could not recognize this image. The clipboard was not changed." = "ddddocr could not recognize this image. The clipboard was not changed.";
 "ddddocr timed out. Try a smaller selection." = "ddddocr timed out. Try a smaller selection.";

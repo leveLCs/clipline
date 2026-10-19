@@ -1,6 +1,8 @@
 # Clipline Capture Implementation Plan
 
-**Goal:** 一個快捷鍵框選 OCR，按住 ⌘ 完成時掛圖。
+**Goal:** 一個快捷鍵框選 OCR，按住 ⌃ Ctrl 完成時掛圖。
+
+2026-10-20 更新：0.3.2 依使用者要求將掛圖修飾鍵由 Command 改為 Control；下方原始實作與驗收紀錄保留當時操作。現行行為以 README、CaptureMode 與最新回歸測試為準。
 **Architecture:** ScreenCaptureKit snapshot → AppKit selection → Vision text or existing Line.
 **Tech Stack:** Swift 5.9 language mode, macOS 14+, AppKit, SwiftUI, Vision, ScreenCaptureKit; no dependencies.
 
@@ -47,3 +49,11 @@ Runtime checks: use synthetic visible Chinese/English fixture with native ⌘⇧
 - Final universal release build and strict ad-hoc signature checks passed. Installed bundle reports 0.2.0 and executable SHA-256 `f203a0b1149d01fbfbd5b5a91f490b811cb8dcbdcd919969604413e7597c6970`, matching the build. Previous installed bundle is preserved at build/Clipline-0.1.0.backup.
 - Installed app was relaunched from /Applications/Clipline.app; the login item remains enabled and allowed for the same path and bundle ID. The installed worker independently recognized a synthetic 1234 image in 0.352 seconds. No test workers remained.
 - Native Option-drag, Command+Option priority gesture, waiting-state Esc and screen-recording permission after the updated signature remain unverified: the desktop driver times out when targeting the menu-bar-only app. Automated mode/process tests are not represented as native gesture acceptance. No new privacy permissions were granted automatically.
+
+## 0.3.2 Ctrl 掛圖更新（2026-10-20）
+
+- 將唯一共用的模式判斷改為 Control 優先於 Option；Command 不再掛圖。同步 12 語系的 HUD／選單／輔助使用提示與正體中文空白掛圖列。
+- 新的按鍵案例在修改前重現 6 個失敗，修改後 11 capture/OCR、38 annotation checks 與 editor assertions 全通過；205 語系 keys 檢查通過。
+- arm64／x86_64 建置完成，候選與原安裝版固定簽章相容。透過 NSRunningApplication.terminate 正常退出舊版後，備份並安裝 0.3.2；安裝版雜湊與候選相同，簽章與正式路徑啟動已確認。
+- 每週上游同步契約已改為 Control 掛圖，並依使用者要求自行正常退出，不例行要求手動退出。
+- 本機完整證據與 0.3.1 回復副本位於 build/control-hang-verification/。Ctrl 真實滑鼠拖曳尚未原生驗收；不以程式測試代替此項觀察。

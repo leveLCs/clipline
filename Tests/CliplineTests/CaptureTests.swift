@@ -9,7 +9,7 @@ struct CaptureTests {
             ("OCR modifier priority", tests.testModifierPriority),
             ("ddddocr subprocess and failures", tests.testDdddOCRProcess),
             ("Real ddddocr", tests.testRealDdddOCR),
-            ("Retina crop and mode", tests.testRetinaCropFlipsYAndUsesMouseUpCommand),
+            ("Retina crop and mode", tests.testRetinaCropFlipsYAndUsesMouseUpControl),
             ("Reverse drag on left display", tests.testReverseDragOnDisplayLeftOfMain),
             ("Clamped crop above main display", tests.testClampsToStartingDisplayAboveMain),
             ("Invalid selection", tests.testClickAndInvalidGeometryDoNotCapture),
@@ -30,7 +30,9 @@ struct CaptureTests {
     func testModifierPriority() throws {
         for (flags, expected): (NSEvent.ModifierFlags, CaptureMode) in [
             ([], .vision), ([.shift], .vision), ([.option], .ddddocr),
-            ([.command], .hang), ([.command, .option], .hang)
+            ([.control], .hang), ([.control, .option], .hang),
+            ([.control, .command, .shift, .option], .hang),
+            ([.command], .vision), ([.command, .shift], .vision), ([.command, .option], .ddddocr)
         ] {
             let selection = try require(CaptureSelection(
                 start: CGPoint(x: 10, y: 10), end: CGPoint(x: 40, y: 40),
@@ -92,11 +94,11 @@ struct CaptureTests {
         expect(try DdddOCR(workerURL: worker).recognize(image) == "1234")
     }
 
-    func testRetinaCropFlipsYAndUsesMouseUpCommand() throws {
+    func testRetinaCropFlipsYAndUsesMouseUpControl() throws {
         let capture = try require(CaptureSelection(
             start: CGPoint(x: 10, y: 20), end: CGPoint(x: 110, y: 70),
             screenFrame: CGRect(x: 0, y: 0, width: 200, height: 100),
-            pixelSize: CGSize(width: 400, height: 200), modifiers: [.command]))
+            pixelSize: CGSize(width: 400, height: 200), modifiers: [.control]))
         expect(capture.rect == CGRect(x: 10, y: 20, width: 100, height: 50))
         expect(capture.pixelRect == CGRect(x: 20, y: 60, width: 200, height: 100))
         expect(capture.mode == .hang)

@@ -56,7 +56,7 @@
 "Sounds" = "音效";
 "Space" = "空白鍵";
 "Stop Watching" = "停止監看";
-"Take a screenshot and it will hang here" = "按 ⌘⇧2 框選，按住 ⌘ 就能掛圖";
+"Take a screenshot and it will hang here" = "按 ⌘⇧2 框選，按住 ⌃ Ctrl 就能掛圖";
 "Take down" = "移除掛圖";
 "Take down everything to the left" = "移除左側全部掛圖";
 "Take down everything to the right" = "移除右側全部掛圖";
@@ -69,7 +69,7 @@
 "When the pointer rests in the menu bar" = "游標停在選單列時";
 "Capture text (Apple Vision)" = "擷取文字（Apple Vision）";
 "Capture text (ddddocr)" = "擷取文字（ddddocr）";
-"Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel" = "框選：Apple Vision · ⌥：ddddocr · ⌘：掛圖 · Esc：取消";
+"Drag: Apple Vision · ⌥: ddddocr · ⌃: Hang image · Esc: Cancel" = "框選：Apple Vision · ⌥：ddddocr · ⌃：掛圖 · Esc：取消";
 "ddddocr is unavailable. Reinstall its local runtime, or capture without Option to use Apple Vision." = "ddddocr 無法使用。請重新安裝它的本機執行環境，或不按 ⌥，使用 Apple Vision 擷取。";
 "ddddocr could not recognize this image. The clipboard was not changed." = "ddddocr 無法辨識這張圖片，已保留原剪貼簿。";
 "ddddocr timed out. Try a smaller selection." = "ddddocr 辨識逾時，請嘗試縮小框選範圍。";

@@ -245,7 +245,7 @@ private final class SelectionView: NSView {
         super.init(frame: frame)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel(L("Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel"))
+        setAccessibilityLabel(L("Drag: Apple Vision · ⌥: ddddocr · ⌃: Hang image · Esc: Cancel"))
     }
     required init?(coder: NSCoder) { nil }
     override var acceptsFirstResponder: Bool { true }
@@ -298,7 +298,7 @@ private final class SelectionView: NSView {
         case .ddddocr: title = isRecognizing ? L("Recognizing text (ddddocr). Escape cancels.") : L("Capture text (ddddocr)")
         case .hang: title = L("Hang image")
         }
-        let hint = L("Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel")
+        let hint = L("Drag: Apple Vision · ⌥: ddddocr · ⌃: Hang image · Esc: Cancel")
         let width = min(620, bounds.width - 40)
         let box = CGRect(x: (bounds.width - width) / 2, y: bounds.height - 112, width: width, height: 68)
         NSColor.black.withAlphaComponent(0.78).setFill()

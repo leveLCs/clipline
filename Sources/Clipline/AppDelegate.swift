@@ -684,7 +684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         captureItem.keyEquivalent = "2"
         captureItem.keyEquivalentModifierMask = [.command, .shift]
-        captureItem.toolTip = L("Drag: Apple Vision · ⌥: ddddocr · ⌘: Hang image · Esc: Cancel")
+        captureItem.toolTip = L("Drag: Apple Vision · ⌥: ddddocr · ⌃: Hang image · Esc: Cancel")
         captureItem.isEnabled = !capture.isActive
         menu.addItem(captureItem)
         if captureHotKey == nil {

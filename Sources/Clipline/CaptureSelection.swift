@@ -4,7 +4,7 @@ enum CaptureMode {
     case vision, ddddocr, hang
 
     init(modifiers: NSEvent.ModifierFlags) {
-        self = modifiers.contains(.command) ? .hang : modifiers.contains(.option) ? .ddddocr : .vision
+        self = modifiers.contains(.control) ? .hang : modifiers.contains(.option) ? .ddddocr : .vision
     }
 }
 
