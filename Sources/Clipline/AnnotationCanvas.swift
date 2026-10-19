@@ -127,6 +127,20 @@ enum AnnotationCanvasGeometry {
         }
         return item.contains(point, tolerance: tolerance)
     }
+    static func hitForEditing(_ item: Annotation, at point: CGPoint, tolerance: CGFloat) -> Bool {
+        let outline = ([AnnotationKind.rectangle, .ellipse].contains(item.kind) && !item.style.filled) || item.kind == .spotlight
+        guard outline else { return hit(item, at: point, tolerance: tolerance) }
+        // Empty interiors remain available for nested annotations while a drawing tool is active.
+        let margin = tolerance + item.style.lineWidth / 2
+        let outer = item.rect.insetBy(dx: -margin, dy: -margin)
+        let inner = item.rect.insetBy(dx: margin, dy: margin)
+        let ellipse = item.kind == .ellipse || (item.kind == .spotlight && item.style.spotlightShape == .ellipse)
+        func contains(_ rect: CGRect) -> Bool {
+            guard rect.width > 0, rect.height > 0 else { return false }
+            return ellipse ? CGPath(ellipseIn: rect, transform: nil).contains(point) : rect.contains(point)
+        }
+        return contains(outer) && !contains(inner)
+    }
 }
 
 @MainActor
@@ -169,6 +183,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         var start: CGPoint
         var base: AnnotationState
         var item: Annotation?
+        var clickTarget: UUID?
+        var didDrag = false
     }
 
     init(document: AnnotationDocument) {
@@ -323,6 +339,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     func beginInteraction(at point: CGPoint, shift: Bool = false, clickCount: Int = 1) {
         finishTextEditing()
         let base = document.state
+        let editingTarget = base.annotations.reversed().first { AnnotationCanvasGeometry.hitForEditing($0, at: point, tolerance: 5 / viewport.scale) }
+        let moveTarget = tool == .hand ? topItem(at: point) : editingTarget
+        let isBrush = tool == .pen || tool == .highlighter
         if isCropping {
             let crop = base.crop ?? sourceRect
             if let handle = hitHandle(AnnotationCanvasGeometry.handles(crop), at: point) {
@@ -334,12 +353,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             gesture = Gesture(action: .erase, start: point, base: base)
         } else if let item = selectedAnnotation, let handle = hitHandle(selectionHandles(item), at: point) {
             gesture = Gesture(action: .resize(item.id, handle), start: point, base: base, item: item)
+        } else if let item = moveTarget,
+                  tool == .hand || (selectedID == item.id && !isBrush) || (clickCount >= 2 && [.text, .bubble, .note].contains(item.kind)) {
+            selectedID = item.id
+            if clickCount >= 2 && [.text, .bubble, .note].contains(item.kind) { beginTextEditing(item.id, isNew: false); return }
+            gesture = Gesture(action: .move(item.id), start: point, base: base, item: item)
         } else if tool == .hand {
-            if let item = topItem(at: point) {
-                selectedID = item.id
-                if clickCount >= 2 && [.text, .bubble, .note].contains(item.kind) { beginTextEditing(item.id, isNew: false); return }
-                gesture = Gesture(action: .move(item.id), start: point, base: base, item: item)
-            } else { selectedID = nil; return }
+            selectedID = nil; return
         } else {
             guard sourceRect.contains(point) else { selectedID = nil; return }
             var item = AnnotationCanvasGeometry.created(kind: tool, from: point, to: point, style: style, shift: shift)
@@ -349,7 +369,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             if tool == .note { item.text = L("Note") }
             if tool == .step || tool == .stamp { item.rect = centeredRect(point, size: CGSize(width: style.size, height: style.size)) }
             selectedID = nil
-            gesture = Gesture(action: .create, start: point, base: base, item: item)
+            gesture = Gesture(action: .create, start: point, base: base, item: item, clickTarget: editingTarget?.id)
         }
         updateInteraction(to: point, shift: shift)
     }
@@ -357,8 +377,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         guard var gesture else { return }
         var next = gesture.base
         let offset = CGSize(width: point.x - gesture.start.x, height: point.y - gesture.start.y)
+        gesture.didDrag = gesture.didDrag || hypot(offset.width, offset.height) * viewport.scale >= 3
+        self.gesture = gesture
         switch gesture.action {
         case .create:
+            if gesture.clickTarget != nil && !gesture.didDrag {
+                preview = next; invalidateImage(); return
+            }
             guard var item = gesture.item else { return }
             if item.kind == .pen || item.kind == .highlighter {
                 if item.points.last != point { item.points.append(point) }
@@ -401,6 +426,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     func endInteraction() {
         guard let gesture, var next = preview else { self.gesture = nil; return }
         self.gesture = nil
+        if case .create = gesture.action, !gesture.didDrag, let target = gesture.clickTarget {
+            preview = nil; selectedID = target; invalidateImage(); return
+        }
         var newText: UUID?
         if case .create = gesture.action, var item = next.annotations.last {
             let isClick = item.rect.width < 1 && item.rect.height < 1

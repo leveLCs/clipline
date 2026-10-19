@@ -37,6 +37,8 @@ struct AnnotationTests {
             ("Canvas degenerate lines and point pen hit geometry", tests.canvasDegenerate),
             ("Canvas gestures create every tool and commit once", tests.canvasGestures),
             ("Canvas move magnifier resize crop and history", tests.canvasEditing),
+            ("Canvas reselect old annotations across drawing tools", tests.canvasReselect),
+            ("Canvas selection preserves nested drawing and brush strokes", tests.canvasSelectionDrawing),
             ("Badge background and text color share style semantics", tests.badgeColors),
             ("Renderer throwing effects restore caller clipping", tests.throwingEffects),
             ("Blur and pixelation change high contrast source pixels", tests.patternMasks),
@@ -130,6 +132,77 @@ struct AnnotationTests {
         canvas.deleteSelection(); expect(doc.state.annotations.count == 1)
     }
 
+    @MainActor func canvasReselect() throws {
+        let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+        let canvas = AnnotationCanvas(document: doc)
+        canvas.selectTool(.arrow)
+        canvas.beginInteraction(at: CGPoint(x: 100, y: 100)); canvas.updateInteraction(to: CGPoint(x: 300, y: 100)); canvas.endInteraction()
+        let arrow = try require(doc.state.annotations.first)
+        canvas.selectTool(.line)
+        canvas.beginInteraction(at: CGPoint(x: 100, y: 250)); canvas.updateInteraction(to: CGPoint(x: 300, y: 250)); canvas.endInteraction()
+        let line = try require(doc.state.annotations.last)
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.endInteraction()
+        expect(canvas.selectedID == arrow.id && doc.state.annotations == [arrow, line] && canvas.tool == .line)
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.updateInteraction(to: CGPoint(x: 220, y: 140)); canvas.endInteraction()
+        let moved = arrow.translated(by: CGSize(width: 20, height: 40))
+        expect(doc.state.annotations == [moved, line])
+        canvas.beginInteraction(at: CGPoint(x: 320, y: 140)); canvas.updateInteraction(to: CGPoint(x: 400, y: 180)); canvas.endInteraction()
+        expect(doc.state.annotations[0].points == [CGPoint(x: 120, y: 140), CGPoint(x: 400, y: 180)])
+        expect(doc.state.annotations[1] == line)
+        canvas.undo(); expect(doc.state.annotations == [moved, line])
+        canvas.undo(); expect(doc.state.annotations == [arrow, line])
+        canvas.undo(); expect(doc.state.annotations == [arrow])
+        canvas.redo(); expect(doc.state.annotations == [arrow, line])
+
+        canvas.selectedID = nil
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.updateInteraction(to: CGPoint(x: 260, y: 190)); canvas.endInteraction()
+        expect(doc.state.annotations.count == 3 && doc.state.annotations[0] == arrow)
+        canvas.undo()
+
+        // Click tolerance follows the view scale, and selection never writes history.
+        canvas.selectedID = nil; canvas.zoom(to: 0.5)
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.updateInteraction(to: CGPoint(x: 204, y: 100)); canvas.endInteraction()
+        expect(canvas.selectedID == arrow.id && doc.state.annotations == [arrow, line])
+        canvas.selectedID = nil
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.updateInteraction(to: CGPoint(x: 220, y: 180)); canvas.updateInteraction(to: CGPoint(x: 200, y: 100)); canvas.endInteraction()
+        expect(doc.state.annotations.count == 3 && doc.state.annotations.last?.kind == .line)
+        canvas.undo(); canvas.selectedID = nil
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.updateInteraction(to: CGPoint(x: 250, y: 170)); canvas.cancelInteraction()
+        expect(doc.state.annotations == [arrow, line])
+
+        var upper = arrow; upper.id = UUID()
+        doc.commit(state: AnnotationState(annotations: [arrow, upper]), label: "Overlap")
+        canvas.selectedID = nil
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.endInteraction()
+        expect(canvas.selectedID == upper.id && doc.state.annotations.count == 2)
+    }
+
+    @MainActor func canvasSelectionDrawing() throws {
+        for kind in [AnnotationKind.rectangle, .ellipse, .spotlight] {
+            let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+            let canvas = AnnotationCanvas(document: doc)
+            let outer = Annotation(kind: kind, rect: CGRect(x: 100, y: 100, width: 300, height: 300))
+            doc.commit(state: AnnotationState(annotations: [outer]), label: "Outer")
+            canvas.selectTool(.rectangle); canvas.selectedID = outer.id
+            canvas.beginInteraction(at: CGPoint(x: 200, y: 200)); canvas.updateInteraction(to: CGPoint(x: 280, y: 280)); canvas.endInteraction()
+            expect(doc.state.annotations.count == 2 && doc.state.annotations[0] == outer)
+            canvas.beginInteraction(at: CGPoint(x: 250, y: 100)); canvas.endInteraction()
+            expect(canvas.selectedID == outer.id && doc.state.annotations.count == 2)
+            if kind == .rectangle {
+                canvas.beginInteraction(at: CGPoint(x: 160, y: 100)); canvas.updateInteraction(to: CGPoint(x: 180, y: 120)); canvas.endInteraction()
+                expect(doc.state.annotations[0].rect.origin == CGPoint(x: 120, y: 120))
+            }
+        }
+        for kind in [AnnotationKind.pen, .highlighter] {
+            let doc = AnnotationDocument(image: try fixture(width: 800, height: 600))
+            let canvas = AnnotationCanvas(document: doc); canvas.selectTool(kind)
+            canvas.beginInteraction(at: CGPoint(x: 100, y: 100)); canvas.updateInteraction(to: CGPoint(x: 300, y: 200)); canvas.endInteraction()
+            let first = try require(doc.state.annotations.first)
+            canvas.beginInteraction(at: CGPoint(x: 200, y: 150)); canvas.updateInteraction(to: CGPoint(x: 300, y: 280)); canvas.endInteraction()
+            expect(doc.state.annotations.count == 2 && doc.state.annotations[0] == first)
+        }
+    }
+
     func badgeColors() throws {
         for kind in [AnnotationKind.step, .note] {
             var style = AnnotationStyle(); style.backgroundColor = AnnotationColor(.blue); style.textColor = AnnotationColor(.green); style.size = 36
@@ -193,7 +266,11 @@ struct AnnotationTests {
         canvas.finishTextEditing()
         expect(doc.state.annotations.count == 1 && doc.state.annotations[0].text == "正體中文")
         canvas.undo(); expect(doc.state.annotations.isEmpty)
-        canvas.redo(); canvas.selectedID = doc.state.annotations[0].id; canvas.editSelectedText()
+        canvas.redo()
+        canvas.selectTool(.line)
+        let bounds = doc.state.annotations[0].rect
+        canvas.beginInteraction(at: CGPoint(x: bounds.midX, y: bounds.midY), clickCount: 2)
+        expect(canvas.isEditingText && doc.state.annotations.count == 1 && canvas.tool == .line)
         let second = try require(canvas.subviews.compactMap { $0 as? NSTextView }.first)
         second.setSelectedRange(NSRange(location: 0, length: 0))
         var copies = 0; canvas.onCopy = { copies += 1 }
@@ -223,7 +300,7 @@ struct AnnotationTests {
         expect(doc.state.annotations.last?.kind == .step && doc.state.annotations.last?.rect.width == canvas.style.size)
         canvas.selectTool(.rectangle); canvas.beginInteraction(at: CGPoint(x: 400, y: 400)); canvas.endInteraction()
         expect(doc.state.annotations.count == 2)
-        canvas.clickCreatesShapes = true; canvas.beginInteraction(at: CGPoint(x: 400, y: 400)); canvas.endInteraction()
+        canvas.clickCreatesShapes = true; canvas.beginInteraction(at: CGPoint(x: 600, y: 400)); canvas.endInteraction()
         expect(doc.state.annotations.count == 3 && doc.state.annotations.last!.rect.width > 1)
     }
 
