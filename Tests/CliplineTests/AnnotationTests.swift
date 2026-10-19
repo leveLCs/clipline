@@ -22,6 +22,7 @@ struct AnnotationTests {
             ("Three masks use earlier composited pixels", tests.masks),
             ("Magnifier independent source and crop privacy", tests.magnifier),
             ("Wrapped note appendix and bubble tail", tests.notes),
+            ("Note appendix uses each note font for wrapping and glyphs", tests.noteTypography),
             ("Every drawing tool and frame variant", tests.tools),
             ("Box variants retain fill round corners and dash gaps", tests.boxVariants),
             ("Crop bounds every effect sampling source", tests.effectPrivacy),
@@ -497,6 +498,32 @@ struct AnnotationTests {
         let cropped = try AnnotationRenderer.render(source: source, state: AnnotationState(annotations: [glass], crop: CGRect(x: 30, y: 0, width: 50, height: 50)))
         let center = pixel(cropped, 27, 22)
         expect(!(center.r > 240 && center.g < 15 && center.b < 15))
+    }
+
+    func noteTypography() throws {
+        let source = try fixture(width: 220, height: 70)
+        var note = Annotation(kind: .note, rect: CGRect(x: 5, y: 4, width: 15, height: 20), text: String(repeating: "iiii WWWW wrapped words. ", count: 4))
+        note.style.fontSize = 12
+        let small = try AnnotationRenderer.render(source: source, state: AnnotationState(annotations: [note]))
+        note.style.fontSize = 32
+        let large = try AnnotationRenderer.render(source: source, state: AnnotationState(annotations: [note]))
+        expect(large.height > small.height * 2)
+        func ink(_ image: CGImage) -> Int {
+            var count = 0
+            for y in stride(from: 70, to: image.height, by: 2) { for x in stride(from: 0, to: image.width, by: 2) {
+                if pixel(image, x, y).r < 128 { count += 1 }
+            } }
+            return count
+        }
+        expect(ink(large) > ink(small) * 2)
+        note.style.fontName = NSFont.monospacedSystemFont(ofSize: 32, weight: .regular).fontName
+        let mono = try AnnotationRenderer.render(source: source, state: AnnotationState(annotations: [note]))
+        var different = 0
+        for y in stride(from: 82, to: min(115, large.height, mono.height), by: 2) { for x in stride(from: 0, to: 220, by: 2) {
+            if abs(Int(pixel(large, x, y).r) - Int(pixel(mono, x, y).r)) > 50 { different += 1 }
+        } }
+        expect(different > 20)
+        expect(pixel(large, 0, large.height - 1).r == 255 && pixel(large, 0, large.height - 1).a == 255)
     }
 
     func notes() throws {

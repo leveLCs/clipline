@@ -37,7 +37,7 @@ import UniformTypeIdentifiers
     /// Used by the close button, Escape, switching files, and application termination.
     @discardableResult func requestClose() -> Bool {
         guard let document else { return true }
-        canvas?.finishTextEditing(); window?.makeFirstResponder(canvas)
+        commitPendingEdits()
         if document.isDirty {
             let alert = NSAlert(); alert.messageText = L("Keep annotation changes?")
             alert.informativeText = L("Save changes to the original image, discard them, or keep editing.")
@@ -54,6 +54,15 @@ import UniformTypeIdentifiers
         if sender === window { _ = requestClose(); return false }
         return true
     }
+    private func commitPendingEdits() {
+        Self.commitPendingEdits(canvas: canvas, windows: [window].compactMap { $0 } + auxiliary)
+        window?.makeFirstResponder(canvas)
+    }
+    static func commitPendingEdits(canvas: AnnotationCanvas?, windows: [NSWindow]) {
+        // Auxiliary note windows have their own field editors, independent of the canvas window.
+        for window in windows { window.makeFirstResponder(nil) }
+        canvas?.finishTextEditing()
+    }
     private func dispose() {
         cancelRecognition(); session = UUID()
         auxiliary.forEach { $0.close() }; auxiliary.removeAll(); notesWindow = nil
@@ -62,7 +71,7 @@ import UniformTypeIdentifiers
     }
     @discardableResult private func finish() -> Bool {
         guard let document, let url = document.sourceURL else { return false }
-        canvas?.finishTextEditing(); window?.makeFirstResponder(canvas)
+        commitPendingEdits()
         do { try document.saveOriginal(); dispose(); onSaved(url); return true }
         catch { showError(error); return false }
     }
@@ -154,7 +163,7 @@ import UniformTypeIdentifiers
         inspector?.configure(kind: item?.kind ?? canvas.tool, style: item?.style ?? canvas.style, selected: item, stamp: canvas.stampText, stepNumber: item.flatMap { document?.state.stepNumber(for: $0.id) } ?? ((document?.state.annotations.filter { $0.kind == .step }.count ?? 0) + 1), force: force)
     }
     private func perform(_ action: AnnotationToolbar.Action) {
-        window?.makeFirstResponder(canvas)
+        commitPendingEdits()
         switch action {
         case .ocr: recognize(qr: false)
         case .undo: canvas?.undo(); refreshInspector(force: true)
@@ -169,7 +178,7 @@ import UniformTypeIdentifiers
         }
     }
     private func rendered(includeNotes: Bool = true) throws -> CGImage {
-        canvas?.finishTextEditing(); window?.makeFirstResponder(canvas)
+        commitPendingEdits()
         guard let document else { throw AnnotationFailure.noSource }
         return try document.render(includeNotes: includeNotes)
     }
@@ -188,8 +197,8 @@ import UniformTypeIdentifiers
         } catch { showError(error) }
     }
     private func saveAs() {
-        guard let document, let window else { return }
-        canvas?.finishTextEditing(); window.makeFirstResponder(canvas)
+        guard let document, window != nil else { return }
+        commitPendingEdits()
         let panel = NSSavePanel(); panel.title = L("Save image as"); panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = (document.sourceURL?.deletingPathExtension().lastPathComponent ?? L("Annotated image")) + "-annotated.png"
         let format = AnnotationPopup(["PNG", "JPEG"]) { [weak panel] index in panel?.allowedContentTypes = [index == 0 ? .png : .jpeg] }
@@ -314,6 +323,7 @@ import UniformTypeIdentifiers
         showPanel(L("Crop image"), content: rows)
     }
     private func showNotes() {
+        commitPendingEdits()
         if let notesWindow, notesWindow.isVisible { notesWindow.orderOut(nil); return }
         notesWindow?.close()
         guard let document else { return }

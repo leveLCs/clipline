@@ -9,6 +9,8 @@ import AppKit
     private var handlers: [ObjectIdentifier: (NSControl) -> Void] = [:]
     private let rows = NSStackView()
     private var current: (UUID?, AnnotationKind)?
+    private var currentText = ""
+    private var currentStepNumber = 0
     private var updating = false
     private weak var stepPreview: AnnotationStepPreview?
 
@@ -22,9 +24,11 @@ import AppKit
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func configure(kind: AnnotationKind, style: AnnotationStyle, selected: Annotation?, stamp: String, stepNumber: Int = 1, force: Bool = false) {
         guard !updating else { return }
-        self.style = style
-        // Preserve active text fields and sliders during their own document callbacks.
-        if !force, let current, current.0 == selected?.id, current.1 == kind { return }
+        let text = selected?.text ?? stamp
+        // Keep controls during geometry-only changes; external undo/redo must refresh their values.
+        if !force, let current, current.0 == selected?.id, current.1 == kind,
+           self.style == style, currentText == text, currentStepNumber == stepNumber { return }
+        self.style = style; currentText = text; currentStepNumber = stepNumber
         current = (selected?.id, kind)
         rows.arrangedSubviews.forEach { rows.removeArrangedSubview($0); $0.removeFromSuperview() }
         handlers.removeAll()
@@ -96,7 +100,9 @@ import AppKit
         if kind == .stamp {
             let field = NSTextField(string: selected?.text ?? stamp); field.cell?.sendsActionOnEndEditing = true
             field.placeholderString = L("Emoji or symbol"); field.widthAnchor.constraint(equalToConstant: 150).isActive = true
-            bind(field) { [weak self] control in self?.onStamp?((control as! NSTextField).stringValue) }
+            bind(field) { [weak self] control in
+                let text = (control as! NSTextField).stringValue; self?.currentText = text; self?.onStamp?(text)
+            }
             row(L("Stamp"), field)
             rows.addArrangedSubview(AnnotationButton(L("Search emoji and symbols"), symbol: nil) { NSApp.orderFrontCharacterPalette(nil) })
         }
@@ -110,7 +116,9 @@ import AppKit
             slider(L("Note font size"), key: \.fontSize, range: 8...72)
             if let selected {
                 let field = NSTextField(string: selected.text); field.cell?.sendsActionOnEndEditing = true; field.widthAnchor.constraint(equalToConstant: 220).isActive = true
-                bind(field) { [weak self] control in self?.onText?((control as! NSTextField).stringValue) }
+                bind(field) { [weak self] control in
+                    let text = (control as! NSTextField).stringValue; self?.currentText = text; self?.onText?(text)
+                }
                 row(L("Note text"), field)
             }
         }
@@ -123,7 +131,11 @@ import AppKit
     private func bind(_ control: NSControl, _ handler: @escaping (NSControl) -> Void) {
         control.target = self; control.action = #selector(controlChanged(_:)); handlers[ObjectIdentifier(control)] = handler
     }
-    @objc private func controlChanged(_ sender: NSControl) { handlers[ObjectIdentifier(sender)]?(sender) }
+    @objc private func controlChanged(_ sender: NSControl) {
+        updating = true
+        defer { updating = false }
+        handlers[ObjectIdentifier(sender)]?(sender)
+    }
     private func changed() { stepPreview?.style = style; stepPreview?.needsDisplay = true; updating = true; onStyle?(style); updating = false }
     private func slider(_ title: String, key: WritableKeyPath<AnnotationStyle, CGFloat>, range: ClosedRange<CGFloat>) {
         func display(_ value: Double) -> String { value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value) }

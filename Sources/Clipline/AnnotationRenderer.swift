@@ -50,7 +50,7 @@ enum AnnotationRenderer {
             context.fill(CGRect(x: 0, y: crop.height, width: crop.width, height: appendix.height))
             for entry in appendix.entries {
                 drawText(entry.text, in: entry.rect.offsetBy(dx: 0, dy: crop.height),
-                         font: .systemFont(ofSize: 14), color: .black, context: context)
+                         font: entry.font, color: .black, context: context)
             }
         }
         guard let result = context.makeImage() else { throw AnnotationFailure.renderFailed }
@@ -334,18 +334,19 @@ enum AnnotationRenderer {
         }
         if item.style.lineWidth > 0 { context.strokeEllipse(in: rect) }
     }
-    private static func noteLayout(_ notes: [Annotation], width: CGFloat, state: AnnotationState) -> (height: CGFloat, entries: [(text: String, rect: CGRect)]) {
+    private static func noteLayout(_ notes: [Annotation], width: CGFloat, state: AnnotationState) -> (height: CGFloat, entries: [(text: String, rect: CGRect, font: NSFont)]) {
         guard !notes.isEmpty else { return (0, []) }
         var y: CGFloat = 12
-        var entries: [(text: String, rect: CGRect)] = []
+        var entries: [(text: String, rect: CGRect, font: NSFont)] = []
         for note in notes {
             let text = "\(state.noteNumber(for: note.id) ?? 1). \(note.text)"
             let textWidth = max(1, width - 24)
+            let font = font(note.style)
             let size = (text as NSString).boundingRect(with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
                                                      options: [.usesLineFragmentOrigin, .usesFontLeading],
-                                                     attributes: [.font: NSFont.systemFont(ofSize: 14)]).size
+                                                     attributes: [.font: font]).size
             let height = ceil(size.height) + 2
-            entries.append((text, CGRect(x: 12, y: y, width: textWidth, height: height)))
+            entries.append((text, CGRect(x: 12, y: y, width: textWidth, height: height), font))
             y += height + 10
         }
         return (ceil(y + 2), entries)

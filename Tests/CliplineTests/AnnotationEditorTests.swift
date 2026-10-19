@@ -47,6 +47,82 @@ import Vision
         wells[0].sendAction(wells[0].action, to: wells[0].target)
         assert(editedStyle?.backgroundColor.space == .displayP3 && editedStyle?.backgroundColor.alpha == 0.7)
         assert(editedStyle?.textColor == .white)
+        // Drive the same Canvas keyboard route as Cmd-Z, without showing a window or posting system events.
+        let history = AnnotationDocument(image: image)
+        let rectangle = Annotation(kind: .rectangle, rect: CGRect(x: 10, y: 10, width: 60, height: 40))
+        history.commit(state: AnnotationState(annotations: [rectangle]), label: "Fixture")
+        let historyCanvas = AnnotationCanvas(document: history)
+        historyCanvas.selectTool(.hand); historyCanvas.selectedID = rectangle.id
+        let historyInspector = AnnotationInspector()
+        func refreshInspector() {
+            let item = historyCanvas.selectedAnnotation!
+            historyInspector.configure(kind: item.kind, style: item.style, selected: item, stamp: "")
+        }
+        historyCanvas.onSelectionChanged = { item in if item != nil { refreshInspector() } }
+        historyInspector.onStyle = { historyCanvas.applyStyle($0) }
+        refreshInspector()
+        let widthSlider = descendants(historyInspector).compactMap { $0 as? NSSlider }.first!
+        widthSlider.doubleValue = 18; widthSlider.sendAction(widthSlider.action, to: widthSlider.target)
+        let colorWell = descendants(historyInspector).compactMap { $0 as? NSColorWell }.first!
+        colorWell.color = .blue; colorWell.sendAction(colorWell.action, to: colorWell.target)
+        let undoKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil, characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6)!
+        let redoKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0, windowNumber: 0, context: nil, characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6)!
+        var regressions = 0
+        func check(_ condition: Bool, _ label: String) { if !condition { regressions += 1; print("FAIL " + label) } }
+        assert(historyCanvas.performKeyEquivalent(with: undoKey))
+        check(AnnotationColor(descendants(historyInspector).compactMap { $0 as? NSColorWell }.first!.color) == .red, "keyboard undo refreshes same-object color well")
+        assert(historyCanvas.performKeyEquivalent(with: undoKey))
+        check(descendants(historyInspector).compactMap { $0 as? NSSlider }.first!.doubleValue == 4, "keyboard undo refreshes same-object width slider")
+        assert(historyCanvas.performKeyEquivalent(with: redoKey))
+        check(descendants(historyInspector).compactMap { $0 as? NSSlider }.first!.doubleValue == 18, "keyboard redo refreshes same-object width slider")
+        let note = Annotation(kind: .note, rect: CGRect(x: 10, y: 10, width: 60, height: 40), text: "Original note")
+        history.commit(state: AnnotationState(annotations: [note]), label: "Note fixture")
+        historyCanvas.selectedID = note.id
+        historyInspector.onText = { historyCanvas.updateSelectedText($0) }
+        let changedNoteField = descendants(historyInspector).compactMap { $0 as? NSTextField }.first { $0.isEditable }!
+        changedNoteField.stringValue = "Changed note"; changedNoteField.sendAction(changedNoteField.action, to: changedNoteField.target)
+        assert(historyCanvas.performKeyEquivalent(with: undoKey))
+        let noteField = descendants(historyInspector).compactMap { $0 as? NSTextField }.first { $0.isEditable }
+        check(noteField?.stringValue == "Original note", "keyboard undo refreshes same-object note field")
+        // The notes overview owns a separate native field editor; no Return/action is sent here.
+        let mainWindow = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 300), styleMask: .borderless, backing: .buffered, defer: false)
+        let notesWindow = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 120), styleMask: .borderless, backing: .buffered, defer: false)
+        let noteURL = FileManager.default.temporaryDirectory.appendingPathComponent("annotation-notes-\(UUID().uuidString).png")
+        try AnnotationRenderer.encode(image).write(to: noteURL)
+        defer { try? FileManager.default.removeItem(at: noteURL) }
+        let noteDocument = try AnnotationDocument(url: noteURL)
+        noteDocument.commit(state: AnnotationState(annotations: [note]), label: "Saved note fixture")
+        try noteDocument.saveOriginal()
+        assert(!noteDocument.isDirty)
+        let noteCanvas = AnnotationCanvas(document: noteDocument)
+        mainWindow.contentView = noteCanvas
+        let overviewField = AnnotationField(note.text) { value in
+            noteCanvas.selectedID = note.id; noteCanvas.updateSelectedText(value)
+        }
+        overviewField.frame = CGRect(x: 10, y: 10, width: 350, height: 30)
+        notesWindow.contentView!.addSubview(overviewField)
+        defer { mainWindow.contentView = nil; notesWindow.contentView = nil }
+        overviewField.selectText(nil)
+        let pending = overviewField.currentEditor() as! NSTextView
+        pending.insertText("Pending overview text without Return", replacementRange: NSRange(location: 0, length: pending.string.utf16.count))
+        assert(noteDocument.state.annotations[0].text == "Original note" && !noteDocument.isDirty)
+        Markup.commitPendingEdits(canvas: noteCanvas, windows: [mainWindow, notesWindow])
+        check(noteDocument.state.annotations[0].text == "Pending overview text without Return", "output preparation commits the auxiliary field editor")
+        let output = try noteDocument.render()
+        var expectedNote = note; expectedNote.text = "Pending overview text without Return"
+        let expected = try AnnotationRenderer.render(source: noteDocument.source, state: AnnotationState(annotations: [expectedNote]))
+        check(output.width == expected.width && output.height == expected.height && (output.dataProvider!.data! as Data) == (expected.dataProvider!.data! as Data), "render includes the unsubmitted overview text")
+        try noteDocument.saveOriginal()
+        assert(!noteDocument.isDirty)
+        let savedBytes = try Data(contentsOf: noteURL), expectedBytes = try noteDocument.encodedData()
+        assert(savedBytes == expectedBytes)
+        overviewField.selectText(nil)
+        let closing = overviewField.currentEditor() as! NSTextView
+        closing.insertText("Pending close text", replacementRange: NSRange(location: 0, length: closing.string.utf16.count))
+        Markup.commitPendingEdits(canvas: noteCanvas, windows: [mainWindow, notesWindow])
+        check(noteDocument.isDirty && noteDocument.state.annotations[0].text == "Pending close text", "close preparation includes auxiliary changes before dirty evaluation")
+        if regressions > 0 { exit(1) }
+        print("PASS pending overview text reaches rendered/saved output and dirty close; keyboard undo/redo refreshes inspector")
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
