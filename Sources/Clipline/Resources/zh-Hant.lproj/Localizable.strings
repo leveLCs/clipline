@@ -206,3 +206,6 @@
 "Text variants" = "文字樣式";
 "Annotation size" = "大小";
 "Step preview" = "步驟預覽";
+"The editable annotation data could not be opened. The image has not been changed." = "無法開啟可編輯的標記資料，圖片未被修改。";
+"The image was changed outside Clipline. Previous annotations could not be restored." = "圖片已被其他程式修改，無法恢復先前的標記元素。";
+"Editable annotations are unavailable on this Mac. Opened as a flat image." = "這台 Mac 沒有可用的標記資料，已開啟合成圖片。";

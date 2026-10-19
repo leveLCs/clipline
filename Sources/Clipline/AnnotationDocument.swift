@@ -186,7 +186,7 @@ struct AnnotationState: Equatable, Codable {
 }
 
 enum AnnotationFailure: LocalizedError {
-    case unreadable, invalidGeometry, renderFailed, unsupportedFormat, changedSource, noSource, writeFailed
+    case unreadable, invalidGeometry, renderFailed, unsupportedFormat, changedSource, noSource, writeFailed, invalidAnnotationData
     var errorDescription: String? {
         switch self {
         case .unreadable: return L("The image could not be opened.")
@@ -196,6 +196,7 @@ enum AnnotationFailure: LocalizedError {
         case .changedSource: return L("The original image was changed or removed. Save a copy instead.")
         case .noSource: return L("This image has no original file. Save a copy instead.")
         case .writeFailed: return L("The annotated image could not be saved.")
+        case .invalidAnnotationData: return L("The editable annotation data could not be opened. The image has not been changed.")
         }
     }
 }
@@ -206,6 +207,8 @@ final class AnnotationDocument {
     let sourceURL: URL?
     let sourceType: String?
     let sourceProperties: [CFString: Any]
+    private var archiveDirectory = AnnotationArchive.directory
+    private(set) var restorationNotice: String?
     private(set) var state = AnnotationState()
     var onChange: (() -> Void)?
     private var past: [(AnnotationState, String)] = []
@@ -222,14 +225,34 @@ final class AnnotationDocument {
     init(image: CGImage) {
         source = image; sourceURL = nil; sourceType = nil; sourceProperties = [:]
     }
-    init(url: URL) throws {
+    init(url: URL, archiveDirectory: URL = AnnotationArchive.directory) throws {
+        self.archiveDirectory = archiveDirectory
         let version = try FileVersion.read(url)
         guard let decoder = CGImageSourceCreateWithData(version.bytes as CFData, nil),
               let raw = CGImageSourceCreateImageAtIndex(decoder, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
         else { throw AnnotationFailure.unreadable }
         sourceProperties = CGImageSourceCopyPropertiesAtIndex(decoder, 0, nil) as? [CFString: Any] ?? [:]
         let orientation = sourceProperties[kCGImagePropertyOrientation] as? Int ?? 1
-        source = try AnnotationRenderer.normalized(raw, orientation: orientation)
+        var base = try AnnotationRenderer.normalized(raw, orientation: orientation)
+        if let id = version.annotationID {
+            if let record = try AnnotationArchive.load(id, in: archiveDirectory) {
+                if record.renderedHash == AnnotationArchive.hash(version.bytes) {
+                    guard let decoder = CGImageSourceCreateWithData(record.sourcePNG as CFData, nil),
+                          CGImageSourceGetType(decoder) as String? == UTType.png.identifier,
+                          let image = CGImageSourceCreateImageAtIndex(decoder, 0, nil),
+                          Set(record.state.annotations.map(\.id)).count == record.state.annotations.count
+                    else { throw AnnotationFailure.invalidAnnotationData }
+                    try AnnotationRenderer.validate(record.state)
+                    _ = try AnnotationRenderer.cropRect(source: image, state: record.state)
+                    base = image; state = record.state; savedState = record.state
+                } else {
+                    restorationNotice = L("The image was changed outside Clipline. Previous annotations could not be restored.")
+                }
+            } else {
+                restorationNotice = L("Editable annotations are unavailable on this Mac. Opened as a flat image.")
+            }
+        }
+        source = base
         sourceURL = url; original = version
         sourceType = CGImageSourceGetType(decoder) as String?
         frameCount = CGImageSourceGetCount(decoder)
@@ -268,16 +291,20 @@ final class AnnotationDocument {
         guard frameCount == 1, let type = sourceType,
               [UTType.png.identifier, UTType.jpeg.identifier, UTType.tiff.identifier, UTType.heic.identifier].contains(type)
         else { throw AnnotationFailure.unsupportedFormat }
-        guard try FileVersion.read(url) == original else { throw AnnotationFailure.changedSource }
+        // macOS can add provenance/access metadata after opening without changing the image or its editable revision.
+        guard try FileVersion.read(url).sameContentAndIdentity(as: original) else { throw AnnotationFailure.changedSource }
         let output = try encodedData(type: type)
+        let archiveID = try AnnotationArchive.save(source: source, state: state, output: output, in: archiveDirectory)
         let temp = url.deletingLastPathComponent().appendingPathComponent(".clipline-\(UUID().uuidString).tmp")
         let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw AnnotationFailure.writeFailed }
         let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         var removeTemp = true
         defer { try? file.close(); if removeTemp { try? FileManager.default.removeItem(at: temp) } }
-        try file.write(contentsOf: output); try file.synchronize(); try file.close()
-        guard try FileVersion.read(url) == original else { throw AnnotationFailure.changedSource }
+        try file.write(contentsOf: output)
+        try AnnotationArchive.attach(archiveID, to: fd)
+        try file.synchronize(); try file.close()
+        guard try FileVersion.read(url).sameContentAndIdentity(as: original) else { throw AnnotationFailure.changedSource }
         let installed = try FileVersion.read(temp)
         // RENAME_SWAP requires an existing destination: a deleted source is never recreated.
         guard renameatx_np(AT_FDCWD, temp.path, AT_FDCWD, url.path, UInt32(RENAME_SWAP)) == 0 else {
@@ -308,6 +335,7 @@ struct FileVersion: Equatable {
     let changedSeconds: Int
     let changedNanos: Int
     let bytes: Data
+    let annotationID: String?
     static func read(_ url: URL) throws -> FileVersion {
         let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         guard fd >= 0 else { throw AnnotationFailure.changedSource }
@@ -316,13 +344,15 @@ struct FileVersion: Equatable {
         var before = stat(), after = stat()
         guard fstat(fd, &before) == 0, (before.st_mode & S_IFMT) == S_IFREG else { throw AnnotationFailure.changedSource }
         let bytes = try file.readToEnd() ?? Data()
+        let annotationID = try AnnotationArchive.readID(from: fd)
         guard fstat(fd, &after) == 0, before.st_ino == after.st_ino, before.st_size == after.st_size,
               before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec, before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec,
               before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec, before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec
         else { throw AnnotationFailure.changedSource }
         return FileVersion(device: after.st_dev, inode: after.st_ino,
                            modifiedSeconds: after.st_mtimespec.tv_sec, modifiedNanos: after.st_mtimespec.tv_nsec,
-                           changedSeconds: after.st_ctimespec.tv_sec, changedNanos: after.st_ctimespec.tv_nsec, bytes: bytes)
+                           changedSeconds: after.st_ctimespec.tv_sec, changedNanos: after.st_ctimespec.tv_nsec,
+                           bytes: bytes, annotationID: annotationID)
     }
     func installedVersion(at url: URL) throws -> FileVersion {
         let current = try FileVersion.read(url)
@@ -330,6 +360,6 @@ struct FileVersion: Equatable {
         return current
     }
     func sameContentAndIdentity(as other: FileVersion) -> Bool {
-        device == other.device && inode == other.inode && bytes == other.bytes
+        device == other.device && inode == other.inode && bytes == other.bytes && annotationID == other.annotationID
     }
 }

@@ -218,3 +218,6 @@
 "Text variants" = "Text variants";
 "Annotation size" = "Annotation size";
 "Step preview" = "Step preview";
+"The editable annotation data could not be opened. The image has not been changed." = "The editable annotation data could not be opened. The image has not been changed.";
+"The image was changed outside Clipline. Previous annotations could not be restored." = "The image was changed outside Clipline. Previous annotations could not be restored.";
+"Editable annotations are unavailable on this Mac. Opened as a flat image." = "Editable annotations are unavailable on this Mac. Opened as a flat image.";

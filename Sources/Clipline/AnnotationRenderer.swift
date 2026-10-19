@@ -354,7 +354,7 @@ enum AnnotationRenderer {
     private static func finite(_ rect: CGRect) -> Bool {
         [rect.origin.x, rect.origin.y, rect.size.width, rect.size.height].allSatisfy { $0.isFinite && abs($0) < 1_000_000 }
     }
-    private static func validate(_ state: AnnotationState) throws {
+    static func validate(_ state: AnnotationState) throws {
         for item in state.annotations {
             let style = item.style
             guard finite(item.rect), item.points.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 1_000_000 && abs($0.y) < 1_000_000 }),

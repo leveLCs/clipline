@@ -80,3 +80,15 @@ Task 4 將 `Markup.shared.requestClose()` 接入 `applicationShouldTerminate`：
 - 0.3.3 arm64／x86_64 建置與固定簽章更新相容驗證通過。已自行透過 `NSRunningApplication.terminate()` 正常退出，保留 0.3.2 備份後安裝並重啟；正式路徑程序、版本與二進位雜湊一致。完整本機紀錄位於 `build/annotation-editing-verification/`。
 
 原生驗收使用同一份標記程式碼的隔離測試器與自製圖片，沒有編輯使用者截圖；正式掛圖入口沿用既有實作。圓角／虛線框採容許範圍內的近似外框命中。本次沒有改變回存格式，完成回存後仍會平面化成圖片。
+
+## 0.4.0 回存後保留可編輯元素（2026-10-20）
+
+- `scripts/test.sh` 全數通過：11 項擷取／真實 Vision 與 ddddocr、47 項標記檢查，以及編輯器 assertions。208 個語系字串檢查通過。
+- 新增磁碟回存→重新建立文件→移動舊箭頭／調整端點／改文字→再回存測試；驗證 ID、原圖、順序、樣式、裁切與乾淨基準一致，沒有重複烙印。PNG／JPEG／TIFF／HEIC 重複回存使用保存的無損底圖，P3／透明度與備註附錄維持一致。
+- 驗證 Finder 類型的檔案移動／複製可恢復且各自獨立、相同合成畫面但不同原圖不混淆、archive 0700／0600、缺失／損壞／未知版本／非法 ID、archive 寫入失敗，以及外部 bytes／inode／annotation ID 改變的拒絕覆寫。分享／複製／另存仍走平面輸出，沒有原圖 payload。
+- 原生驗收發現 macOS 在開啟圖片後補上 `com.apple.macl`／provenance，使 ctime 改變；原先整個 FileVersion 相等判斷誤擋回存。新增回歸測試先確認失敗，再改成與既有 swap 後檢查一致的 bytes／device／inode／annotation ID 驗證。讀取期間 stat 一致性及 RENAME_SWAP／回滾防護仍保留。
+- CUA 以隔離原生測試器建立箭頭、線及文字，完成第一次回存；重開後點選舊箭頭，移動並拉端點縮放，雙擊文字改為 `Reopened and edited`，第二次回存成功。兩份 archive 比對：原圖及三個 ID 不變，箭頭幾何／文字有變，線未變。正常退出並重啟測試器後再次選取箭頭，顯示控制點且沒有額外烙印；Undo 為新工作階段的空歷史。
+- 獨立設計及程式審查通過。0.4.0 arm64／x86_64 建置、固定簽章及更新相容檢查通過；自行正常退出 0.3.3、備份、安裝到 `/Applications/Clipline.app` 並重啟，正式程序路徑／版本／binary SHA256 與建置一致。自動更新契約已加入可編輯資料相容與平面分享保護。
+- 證據位於忽略版控的 `build/annotation-persistence-verification/`：測試／建置紀錄、兩次原生保存資料與圖片、安裝版本／雜湊及 0.3.3 備份。
+
+限制：舊版已平面化標記無法還原；新資料只在本機保存，傳輸若丟失 xattr 或換到沒有 archive 的 Mac，只能開啟合成圖片。本機 archive 包含遮罩前／裁切前的原圖，刪除圖片不會自動清除 archive；初版不做垃圾回收或跨工作階段 Undo。原生驗收使用自製圖片及相同 production 編輯器程式，沒有修改使用者截圖；本次未重做未改動的正式掛圖入口或隱私授權驗收。

@@ -6,7 +6,7 @@ export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$PWD/.build/ModuleCac
 APP="$PWD/.build/annotation-harness/Clipline Annotation QA.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -parse-as-library -o "$APP/Contents/MacOS/AnnotationQA" \
- Sources/Clipline/AnnotationDocument.swift Sources/Clipline/AnnotationRenderer.swift \
+ Sources/Clipline/AnnotationArchive.swift Sources/Clipline/AnnotationDocument.swift Sources/Clipline/AnnotationRenderer.swift \
  Sources/Clipline/AnnotationCanvas.swift Sources/Clipline/AnnotationEditorSettings.swift \
  Sources/Clipline/AnnotationRecognition.swift Sources/Clipline/AnnotationToolbar.swift \
  Sources/Clipline/AnnotationInspector.swift Sources/Clipline/Markup.swift \

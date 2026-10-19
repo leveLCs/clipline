@@ -90,7 +90,9 @@ import Vision
         let noteURL = FileManager.default.temporaryDirectory.appendingPathComponent("annotation-notes-\(UUID().uuidString).png")
         try AnnotationRenderer.encode(image).write(to: noteURL)
         defer { try? FileManager.default.removeItem(at: noteURL) }
-        let noteDocument = try AnnotationDocument(url: noteURL)
+        let archives = noteURL.appendingPathExtension("archives")
+        defer { try? FileManager.default.removeItem(at: archives) }
+        let noteDocument = try AnnotationDocument(url: noteURL, archiveDirectory: archives)
         noteDocument.commit(state: AnnotationState(annotations: [note]), label: "Saved note fixture")
         try noteDocument.saveOriginal()
         assert(!noteDocument.isDirty)

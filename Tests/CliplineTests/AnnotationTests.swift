@@ -9,6 +9,13 @@ struct AnnotationTests {
         let tests = AnnotationTests()
         let cases: [(String, () throws -> Void)] = [
             ("Snapshot undo redo dirty and 100 limit", tests.history),
+            ("Saved annotations reopen as editable elements over the original", tests.persistence),
+            ("Editable archives survive rename and copies remain independent", tests.archiveCopies),
+            ("Identical flat images retain distinct editable documents", tests.archiveIdentity),
+            ("Archive failure and external image changes preserve originals", tests.archiveFailures),
+            ("System metadata changes do not block unchanged image saves", tests.archiveSystemMetadata),
+            ("Missing corrupt and unsupported archives never silently restore", tests.archiveRecovery),
+            ("Archive keeps crop notes P3 and transparency while exports stay flat", tests.archivePrivacy),
             ("Dynamic step numbering and Codable P3 style", tests.numbering),
             ("Exact crop excludes outside pixels", tests.crop),
             ("All eight EXIF orientations", tests.orientations),
@@ -56,6 +63,208 @@ struct AnnotationTests {
         }
         print("\(cases.count) checks; \(failures) failures")
         if failures > 0 { exit(1) }
+    }
+
+    @MainActor func persistence() throws {
+        try withFolder { folder in
+            let url = folder.appendingPathComponent("editable.png")
+            try encode(fixture(width: 800, height: 600), url, UTType.png.identifier)
+            let doc = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
+            let arrow = Annotation(kind: .arrow, rect: CGRect(x: 40, y: 50, width: 200, height: 100),
+                                   points: [CGPoint(x: 40, y: 50), CGPoint(x: 240, y: 150)])
+            let line = Annotation(kind: .line, points: [CGPoint(x: 300, y: 200), CGPoint(x: 500, y: 200)])
+            let text = Annotation(kind: .text, rect: CGRect(x: 30, y: 300, width: 250, height: 80), text: "可繼續編輯")
+            let state = AnnotationState(annotations: [arrow, line, text], crop: CGRect(x: 10, y: 20, width: 650, height: 500))
+            doc.commit(state: state, label: "Fixture")
+            let expected = try doc.encodedData()
+            try doc.saveOriginal()
+            let reopened = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
+            expect(reopened.state == state)
+            expect(reopened.source.width == 800 && reopened.source.height == 600)
+            expect(!reopened.isDirty && !reopened.canUndo && !reopened.canRedo)
+            expect(try reopened.encodedData() == expected)
+            let canvas = AnnotationCanvas(document: reopened)
+            canvas.selectTool(.hand)
+            canvas.beginInteraction(at: CGPoint(x: 140, y: 100))
+            canvas.updateInteraction(to: CGPoint(x: 160, y: 120)); canvas.endInteraction()
+            expect(reopened.state.annotations[0].points == [CGPoint(x: 60, y: 70), CGPoint(x: 260, y: 170)])
+            canvas.beginInteraction(at: CGPoint(x: 260, y: 170))
+            canvas.updateInteraction(to: CGPoint(x: 280, y: 190)); canvas.endInteraction()
+            expect(reopened.state.annotations[0].points.last == CGPoint(x: 280, y: 190))
+            canvas.selectedID = text.id; canvas.updateSelectedText("再次編輯")
+            let edited = reopened.state
+            let secondOutput = try reopened.encodedData()
+            try reopened.saveOriginal()
+            let second = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
+            expect(second.state == edited && second.state.annotations.count == 3)
+            expect(try second.encodedData() == secondOutput)
+            var cleared = second.state; cleared.annotations = []; cleared.crop = nil
+            second.commit(state: cleared, label: "Remove all")
+            expect(try second.encodedData() == AnnotationRenderer.encode(fixture(width: 800, height: 600)))
+        }
+    }
+
+    @MainActor func archiveCopies() throws {
+        try withFolder { folder in
+            let archives = folder.appendingPathComponent("archives")
+            let url = folder.appendingPathComponent("original.png"), renamed = folder.appendingPathComponent("renamed.png")
+            let copy = folder.appendingPathComponent("copy.png")
+            try encode(fixture(), url, UTType.png.identifier)
+            let doc = try AnnotationDocument(url: url, archiveDirectory: archives)
+            let state = AnnotationState(annotations: [Annotation(kind: .text, text: "One")])
+            doc.commit(state: state, label: "Fixture"); try doc.saveOriginal()
+            let firstID = try require(FileVersion.read(url).annotationID)
+            try FileManager.default.moveItem(at: url, to: renamed)
+            try FileManager.default.copyItem(at: renamed, to: copy)
+            let moved = try AnnotationDocument(url: renamed, archiveDirectory: archives)
+            let copied = try AnnotationDocument(url: copy, archiveDirectory: archives)
+            expect(moved.state == state && copied.state == state)
+            var changed = state; changed.annotations[0].text = "Independent"
+            copied.commit(state: changed, label: "Edit copy"); try copied.saveOriginal()
+            expect(try FileVersion.read(copy).annotationID != firstID)
+            expect(try AnnotationDocument(url: renamed, archiveDirectory: archives).state == state)
+            expect(try AnnotationDocument(url: copy, archiveDirectory: archives).state == changed)
+            expect(FileManager.default.fileExists(atPath: archives.appendingPathComponent(firstID + ".json").path))
+        }
+    }
+
+    @MainActor func archiveIdentity() throws {
+        try withFolder { folder in
+            let archives = folder.appendingPathComponent("archives")
+            let a = folder.appendingPathComponent("a.png"), b = folder.appendingPathComponent("b.png")
+            try encode(fixture(bands: false), a, UTType.png.identifier)
+            try encode(fixture(bands: true), b, UTType.png.identifier)
+            let first = try AnnotationDocument(url: a, archiveDirectory: archives)
+            let second = try AnnotationDocument(url: b, archiveDirectory: archives)
+            var mask = Annotation(kind: .pixelate, rect: CGRect(x: 0, y: 0, width: 80, height: 50))
+            mask.style.maskStyle = .solid; mask.style.color = .black
+            first.commit(state: AnnotationState(annotations: [mask]), label: "Mask")
+            mask.id = UUID()
+            second.commit(state: AnnotationState(annotations: [mask]), label: "Mask")
+            try first.saveOriginal(); try second.saveOriginal()
+            expect(try Data(contentsOf: a) == Data(contentsOf: b))
+            expect(try FileVersion.read(a).annotationID != FileVersion.read(b).annotationID)
+            let reopenedA = try AnnotationDocument(url: a, archiveDirectory: archives)
+            let reopenedB = try AnnotationDocument(url: b, archiveDirectory: archives)
+            expect(reopenedA.state == first.state && reopenedB.state == second.state)
+            expect(pixel(reopenedA.source, 5, 5).g > 240 && pixel(reopenedB.source, 5, 5).g < 15)
+        }
+    }
+
+    @MainActor func archiveFailures() throws {
+        try withFolder { folder in
+            let url = folder.appendingPathComponent("source.png"), archives = folder.appendingPathComponent("archives")
+            try encode(fixture(), url, UTType.png.identifier)
+            let before = try FileVersion.read(url)
+            try Data("blocked directory".utf8).write(to: archives)
+            let doc = try AnnotationDocument(url: url, archiveDirectory: archives)
+            doc.commit(state: AnnotationState(annotations: [Annotation(kind: .text, text: "Keep edits")]), label: "Edit")
+            expectThrows { try doc.saveOriginal() }
+            expect(try FileVersion.read(url) == before && doc.isDirty)
+            try FileManager.default.removeItem(at: archives)
+            try doc.saveOriginal()
+            let saved = try FileVersion.read(url)
+            let id = try require(saved.annotationID)
+            let archive = archives.appendingPathComponent(id + ".json"), archiveBytes = try Data(contentsOf: archive)
+            let current = try AnnotationDocument(url: url, archiveDirectory: archives)
+            // A content-only external edit preserves xattrs but must never resurrect the old pixels.
+            let foreign = try AnnotationRenderer.encode(fixture(width: 90))
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: 0); try handle.write(contentsOf: foreign); try handle.close()
+            expectThrows { try current.saveOriginal() }
+            let external = try AnnotationDocument(url: url, archiveDirectory: archives)
+            expect(external.state.annotations.isEmpty && external.source.width == 90 && external.restorationNotice != nil)
+            expect(try Data(contentsOf: archive) == archiveBytes && Data(contentsOf: url) == foreign)
+            // Attribute-only changes are also a conflicting version.
+            let baseline = try FileVersion.read(url)
+            let fd = open(url.path, O_WRONLY); defer { close(fd) }
+            try AnnotationArchive.attach(UUID().uuidString, to: fd)
+            expect(try FileVersion.read(url) != baseline)
+            expectThrows { _ = try baseline.installedVersion(at: url) }
+            expectThrows { try AnnotationArchive.attach(id, to: -1) }
+        }
+    }
+
+    @MainActor func archiveSystemMetadata() throws {
+        try withFolder { folder in
+            let url = folder.appendingPathComponent("image.png"), archives = folder.appendingPathComponent("archives")
+            try encode(fixture(), url, UTType.png.identifier)
+            let doc = try AnnotationDocument(url: url, archiveDirectory: archives)
+            doc.commit(state: AnnotationState(annotations: [Annotation(kind: .text, text: "Keep")]), label: "Edit")
+            let before = try FileVersion.read(url)
+            let fd = open(url.path, O_WRONLY); defer { close(fd) }
+            let metadata = Data("system metadata fixture".utf8)
+            expect(metadata.withUnsafeBytes { fsetxattr(fd, "io.github.leveLCs.Clipline.test", $0.baseAddress, $0.count, 0, 0) } == 0)
+            expect(try FileVersion.read(url) != before)
+            try doc.saveOriginal()
+            expect(!doc.isDirty)
+            expect(try AnnotationDocument(url: url, archiveDirectory: archives).state == doc.state)
+        }
+    }
+
+    @MainActor func archiveRecovery() throws {
+        try withFolder { folder in
+            let url = folder.appendingPathComponent("image.png"), archives = folder.appendingPathComponent("archives")
+            try encode(fixture(), url, UTType.png.identifier)
+            let doc = try AnnotationDocument(url: url, archiveDirectory: archives)
+            doc.commit(state: AnnotationState(annotations: [Annotation(kind: .text, text: "Saved")]), label: "Edit")
+            try doc.saveOriginal()
+            let image = try FileVersion.read(url)
+            let id = try require(image.annotationID), archive = archives.appendingPathComponent(id + ".json")
+            let bytes = try Data(contentsOf: archive)
+            try FileManager.default.removeItem(at: archive)
+            let flat = try AnnotationDocument(url: url, archiveDirectory: archives)
+            expect(flat.state.annotations.isEmpty && flat.restorationNotice != nil)
+            try Data("broken".utf8).write(to: archive)
+            expectThrows { _ = try AnnotationDocument(url: url, archiveDirectory: archives) }
+            var record = try JSONDecoder().decode(AnnotationArchive.Record.self, from: bytes)
+            record.version = 999
+            try JSONEncoder().encode(record).write(to: archive)
+            expectThrows { _ = try AnnotationDocument(url: url, archiveDirectory: archives) }
+            record.version = 1; record.state.annotations[0].style.zoom = -1
+            try JSONEncoder().encode(record).write(to: archive)
+            expectThrows { _ = try AnnotationDocument(url: url, archiveDirectory: archives) }
+            expect(try FileVersion.read(url) == image)
+            try bytes.write(to: archive)
+            expect(try AnnotationDocument(url: url, archiveDirectory: archives).state == doc.state)
+            expectThrows { _ = try AnnotationArchive.load("../../escape", in: archives) }
+            let fd = open(url.path, O_WRONLY); defer { close(fd) }
+            let invalid = Data("../../escape".utf8)
+            expect(invalid.withUnsafeBytes { fsetxattr(fd, AnnotationArchive.attribute, $0.baseAddress, $0.count, 0, 0) } == 0)
+            expectThrows { _ = try AnnotationDocument(url: url, archiveDirectory: archives) }
+        }
+    }
+
+    @MainActor func archivePrivacy() throws {
+        try withFolder { folder in
+            let url = folder.appendingPathComponent("image.png"), archives = folder.appendingPathComponent("archives")
+            try encode(fixture(width: 400, height: 300, alpha: true, space: CGColorSpace(name: CGColorSpace.displayP3)!), url, UTType.png.identifier)
+            let doc = try AnnotationDocument(url: url, archiveDirectory: archives)
+            let note = Annotation(kind: .note, rect: CGRect(x: 50, y: 50, width: 80, height: 40), text: "Private editable note")
+            doc.commit(state: AnnotationState(annotations: [note], crop: CGRect(x: 30, y: 30, width: 220, height: 160)), label: "Crop and note")
+            let output = try doc.encodedData()
+            try doc.saveOriginal()
+            let opened = try AnnotationDocument(url: url, archiveDirectory: archives)
+            expect(opened.source.width == 400 && opened.source.height == 300 && opened.state == doc.state)
+            expect(opened.source.colorSpace?.name == CGColorSpace.displayP3 && pixel(opened.source, 0, 0).a == 0)
+            expect(try opened.encodedData() == output)
+            try opened.saveOriginal()
+            expect(try Data(contentsOf: url) == output)
+            let id = try require(FileVersion.read(url).annotationID)
+            let archive = archives.appendingPathComponent(id + ".json")
+            expect((try FileManager.default.attributesOfItem(atPath: archives.path)[.posixPermissions] as? NSNumber)?.intValue == 0o700)
+            expect((try FileManager.default.attributesOfItem(atPath: archive.path)[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+            for type in [UTType.png.identifier, UTType.jpeg.identifier] {
+                let exported = folder.appendingPathComponent(UUID().uuidString)
+                try opened.encodedData(type: type).write(to: exported)
+                expect(try FileVersion.read(exported).annotationID == nil)
+                let flat = try AnnotationDocument(url: exported, archiveDirectory: archives)
+                expect(flat.state.annotations.isEmpty && flat.restorationNotice == nil)
+                expect(flat.source.width == 220 && flat.source.height > 160)
+                let metadata = CGImageSourceCopyPropertiesAtIndex(CGImageSourceCreateWithURL(exported as CFURL, nil)!, 0, nil) as? [String: Any]
+                expect(!String(describing: metadata).contains("sourcePNG") && !String(describing: metadata).contains(id))
+            }
+        }
     }
 
     func canvasCoordinates() throws {
@@ -462,7 +671,7 @@ struct AnnotationTests {
             for orientation in 1...8 {
                 let url = folder.appendingPathComponent("\(orientation).tiff")
                 try encode(source, url, UTType.tiff.identifier, [kCGImagePropertyOrientation: orientation])
-                let doc = try AnnotationDocument(url: url)
+                let doc = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
                 let image = try doc.render(includeNotes: false)
                 let columns = orientation >= 5 ? 2 : 3
                 expect(image.width == columns * 10 && image.height == (6 / columns) * 10)
@@ -474,10 +683,11 @@ struct AnnotationTests {
 
     @MainActor func formats() throws {
         try withFolder { folder in
-            for type in [UTType.png.identifier, UTType.jpeg.identifier, UTType.tiff.identifier] {
+            for type in [UTType.png.identifier, UTType.jpeg.identifier, UTType.tiff.identifier, UTType.heic.identifier] {
                 let url = folder.appendingPathComponent(UUID().uuidString + ".wrong")
                 try encode(fixture(), url, type)
-                let doc = try AnnotationDocument(url: url)
+                let doc = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
+                let originalPixels = try AnnotationRenderer.encode(doc.source)
                 doc.commit(state: AnnotationState(crop: CGRect(x: 2, y: 3, width: 21, height: 17)), label: "Crop")
                 try doc.saveOriginal()
                 let source = try require(CGImageSourceCreateWithURL(url as CFURL, nil))
@@ -486,6 +696,11 @@ struct AnnotationTests {
                 let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
                 expect((properties?[kCGImagePropertyOrientation] as? Int ?? 1) == 1)
                 expect(!doc.isDirty)
+                let reopened = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
+                expect(reopened.state == doc.state && reopened.sourceType == type)
+                expect(try AnnotationRenderer.encode(reopened.source) == originalPixels)
+                try reopened.saveOriginal()
+                expect(try AnnotationRenderer.encode(AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives")).source) == originalPixels)
                 doc.undo(); expect(doc.isDirty)
             }
             let multi = folder.appendingPathComponent("multi.tiff")
@@ -494,7 +709,7 @@ struct AnnotationTests {
             CGImageDestinationAddImage(destination, try fixture(), nil)
             expect(CGImageDestinationFinalize(destination))
             let bytes = try Data(contentsOf: multi)
-            let doc = try AnnotationDocument(url: multi)
+            let doc = try AnnotationDocument(url: multi, archiveDirectory: folder.appendingPathComponent("archives"))
             expectThrows { try doc.saveOriginal() }
             expect(try Data(contentsOf: multi) == bytes)
         }
@@ -520,16 +735,16 @@ struct AnnotationTests {
             let url = folder.appendingPathComponent("source.png")
             try encode(fixture(), url, UTType.png.identifier)
             let original = try Data(contentsOf: url)
-            let changed = try AnnotationDocument(url: url)
+            let changed = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
             try encode(fixture(width: 90), url, UTType.png.identifier)
             let newBytes = try Data(contentsOf: url)
             expectThrows { try changed.saveOriginal() }; expect(try Data(contentsOf: url) == newBytes)
             try original.write(to: url)
-            let deleted = try AnnotationDocument(url: url)
+            let deleted = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
             try FileManager.default.removeItem(at: url)
             expectThrows { try deleted.saveOriginal() }; expect(!FileManager.default.fileExists(atPath: url.path))
             try original.write(to: url)
-            let replaced = try AnnotationDocument(url: url)
+            let replaced = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
             try FileManager.default.removeItem(at: url); try original.write(to: url)
             expectThrows { try replaced.saveOriginal() }
         }
@@ -540,13 +755,13 @@ struct AnnotationTests {
             let url = folder.appendingPathComponent("source.png")
             try encode(fixture(), url, UTType.png.identifier)
             let original = try Data(contentsOf: url)
-            let doc = try AnnotationDocument(url: url)
+            let doc = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
             doc.commit(state: AnnotationState(annotations: [Annotation(kind: .text, text: "Secret")]), label: "Edit")
             _ = try doc.render()
             expect(try Data(contentsOf: url) == original)
             expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).count == 1)
             try doc.saveOriginal()
-            expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).count == 1)
+            expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).count == 2)
             let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
             expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
             expectThrows { try AnnotationDocument(image: fixture()).saveOriginal() }
@@ -760,7 +975,7 @@ struct AnnotationTests {
             let url = folder.appendingPathComponent("private.png")
             try encode(fixture(), url, UTType.png.identifier, [kCGImagePropertyPNGDictionary: [kCGImagePropertyPNGDescription: url.absoluteString],
                                                                kCGImagePropertyDPIWidth: 144, kCGImagePropertyDPIHeight: 144])
-            let doc = try AnnotationDocument(url: url)
+            let doc = try AnnotationDocument(url: url, archiveDirectory: folder.appendingPathComponent("archives"))
             let data = try doc.encodedData()
             expect(data.range(of: Data(url.absoluteString.utf8)) == nil)
             let decoder = try require(CGImageSourceCreateWithData(data as CFData, nil))
