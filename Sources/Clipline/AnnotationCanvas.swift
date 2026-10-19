@@ -260,7 +260,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             context.saveGState(); context.translateBy(x: 0, y: bounds.height); context.scaleBy(x: 1, y: -1)
             context.draw(cachedImage, in: bounds); context.restoreGState()
         }
-        if let crop = state.crop ?? (isCropping ? sourceRect : nil) {
+        do {
+            let crop = state.crop ?? sourceRect
             let r = viewport.viewRect(crop)
             let mask = NSBezierPath(rect: viewport.viewRect(sourceRect)); mask.appendRect(r); mask.windingRule = .evenOdd
             NSColor.black.withAlphaComponent(0.35).setFill(); mask.fill()
