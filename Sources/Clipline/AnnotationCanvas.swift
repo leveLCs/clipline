@@ -87,6 +87,28 @@ enum AnnotationCanvasGeometry {
         guard !crop.isNull, crop.width >= 1, crop.height >= 1 else { return nil }
         return crop
     }
+    static func squareCrop(from anchor: CGPoint, to point: CGPoint, source: CGRect) -> CGRect? {
+        let dx = point.x - anchor.x, dy = point.y - anchor.y
+        let availableX = dx < 0 ? anchor.x - source.minX : source.maxX - anchor.x
+        let availableY = dy < 0 ? anchor.y - source.minY : source.maxY - anchor.y
+        let side = max(0, min(max(abs(dx), abs(dy)), availableX, availableY))
+        let end = CGPoint(x: anchor.x + (dx < 0 ? -side : side), y: anchor.y + (dy < 0 ? -side : side))
+        return clampedCrop(rect(from: anchor, to: end), source: source)
+    }
+    static func resizedCrop(_ crop: CGRect, handle: AnnotationHandle, to point: CGPoint, shift: Bool, source: CGRect) -> CGRect? {
+        if shift {
+            let anchor: CGPoint
+            switch handle {
+            case .topLeft: anchor = CGPoint(x: crop.maxX, y: crop.maxY)
+            case .topRight: anchor = CGPoint(x: crop.minX, y: crop.maxY)
+            case .bottomLeft: anchor = CGPoint(x: crop.maxX, y: crop.minY)
+            case .bottomRight: anchor = crop.origin
+            default: return clampedCrop(resizedRect(crop, handle: handle, to: point, shift: false), source: source)
+            }
+            return squareCrop(from: anchor, to: point, source: source)
+        }
+        return clampedCrop(resizedRect(crop, handle: handle, to: point, shift: false), source: source)
+    }
     static func movedCrop(_ crop: CGRect, by offset: CGSize, source: CGRect) -> CGRect {
         CGRect(x: max(source.minX, min(source.maxX - crop.width, crop.minX + offset.width)),
                y: max(source.minY, min(source.maxY - crop.height, crop.minY + offset.height)), width: crop.width, height: crop.height)
@@ -360,13 +382,12 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             next = preview ?? gesture.base
             if let index = next.annotations.lastIndex(where: { AnnotationCanvasGeometry.hit($0, at: point, tolerance: 5 / viewport.scale) }) { next.annotations.remove(at: index) }
         case .cropCreate:
-            let end = shift ? AnnotationCanvasGeometry.constrained(clampedPoint(point), from: gesture.start, line: false) : clampedPoint(point)
-            next.crop = AnnotationCanvasGeometry.clampedCrop(AnnotationCanvasGeometry.rect(from: gesture.start, to: end), source: sourceRect) ?? gesture.base.crop
+            if shift { next.crop = AnnotationCanvasGeometry.squareCrop(from: gesture.start, to: clampedPoint(point), source: sourceRect) ?? gesture.base.crop }
+            else { next.crop = AnnotationCanvasGeometry.clampedCrop(AnnotationCanvasGeometry.rect(from: gesture.start, to: clampedPoint(point)), source: sourceRect) ?? gesture.base.crop }
         case .cropMove:
             next.crop = AnnotationCanvasGeometry.movedCrop(gesture.base.crop ?? sourceRect, by: offset, source: sourceRect)
         case .cropResize(let handle):
-            let crop = AnnotationCanvasGeometry.resizedRect(gesture.base.crop ?? sourceRect, handle: handle, to: clampedPoint(point), shift: shift)
-            next.crop = AnnotationCanvasGeometry.clampedCrop(crop, source: sourceRect) ?? gesture.base.crop
+            next.crop = AnnotationCanvasGeometry.resizedCrop(gesture.base.crop ?? sourceRect, handle: handle, to: clampedPoint(point), shift: shift, source: sourceRect) ?? gesture.base.crop
         }
         preview = next; invalidateImage()
     }

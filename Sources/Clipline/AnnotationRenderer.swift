@@ -200,22 +200,12 @@ enum AnnotationRenderer {
         context.strokePath()
     }
     private static func arrow(_ item: Annotation, context: CGContext) {
-        let ends = endpoints(item), a = ends[0], b = ends[1]
-        let dx = b.x - a.x, dy = b.y - a.y, length = hypot(dx, dy)
-        guard length > 0 else { return }
-        let unit = CGPoint(x: dx / length, y: dy / length)
-        let head = min(length / 2, max(item.style.lineWidth * 4, 12))
-        let base = CGPoint(x: b.x - unit.x * head, y: b.y - unit.y * head)
-        let left = CGPoint(x: base.x - unit.y * head / 2, y: base.y + unit.x * head / 2)
-        let right = CGPoint(x: base.x + unit.y * head / 2, y: base.y - unit.x * head / 2)
-        if item.style.arrowStyle == .dashed { context.setLineDash(phase: 0, lengths: [8, 6]) }
-        if item.style.arrowStyle == .curved {
-            let control = CGPoint(x: (a.x + b.x) / 2 - dy * 0.25, y: (a.y + b.y) / 2 + dx * 0.25)
-            context.beginPath(); context.move(to: a); context.addQuadCurve(to: b, control: control); context.strokePath()
-        } else { stroke(points: [a, item.style.arrowStyle == .emphasis ? base : b], context: context) }
+        guard let geometry = AnnotationArrowGeometry(item) else { return }
+        if geometry.arrowStyle == .dashed { context.setLineDash(phase: 0, lengths: [8, 6]) }
+        context.addPath(geometry.shaft); context.strokePath()
         context.setLineDash(phase: 0, lengths: [])
-        context.beginPath(); context.move(to: left); context.addLine(to: b); context.addLine(to: right)
-        if item.style.arrowStyle == .emphasis { context.closePath(); context.fillPath() }
+        context.addPath(geometry.head)
+        if geometry.arrowStyle == .emphasis { context.fillPath() }
         else { context.strokePath() }
     }
     private static func font(_ style: AnnotationStyle) -> NSFont {

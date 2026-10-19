@@ -40,7 +40,9 @@ struct AnnotationTests {
             ("Renderer throwing effects restore caller clipping", tests.throwingEffects),
             ("Blur and pixelation change high contrast source pixels", tests.patternMasks),
             ("Native text composition and image copy routing", tests.canvasText),
-            ("Canvas crop handles source sample and point clicks", tests.canvasHandles)
+            ("Canvas crop handles source sample and point clicks", tests.canvasHandles),
+            ("Curved arrows select and erase visible geometry", tests.curvedArrowHit),
+            ("Shift crop remains square against source edges", tests.squareCropEdges)
         ]
         for (name, run) in cases {
             let before = failures
@@ -220,6 +222,43 @@ struct AnnotationTests {
         expect(doc.state.annotations.count == 2)
         canvas.clickCreatesShapes = true; canvas.beginInteraction(at: CGPoint(x: 400, y: 400)); canvas.endInteraction()
         expect(doc.state.annotations.count == 3 && doc.state.annotations.last!.rect.width > 1)
+    }
+
+    @MainActor func curvedArrowHit() throws {
+        var style = AnnotationStyle(); style.arrowStyle = .curved
+        let arrow = Annotation(kind: .arrow, rect: CGRect(x: 100, y: 100, width: 200, height: 0), points: [CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 100)], style: style)
+        expect(AnnotationCanvasGeometry.hit(arrow, at: CGPoint(x: 200, y: 125), tolerance: 5))
+        expect(!AnnotationCanvasGeometry.hit(arrow, at: CGPoint(x: 200, y: 100), tolerance: 5))
+        expect(AnnotationCanvasGeometry.hit(arrow, at: CGPoint(x: 284, y: 108), tolerance: 2))
+        var note = arrow; note.kind = .note; note.style.arrowStyle = .open; note.style.noteStyle = .curvedArrow
+        expect(AnnotationCanvasGeometry.hit(note, at: CGPoint(x: 200, y: 125), tolerance: 5))
+        expect(!AnnotationCanvasGeometry.hit(note, at: CGPoint(x: 200, y: 100), tolerance: 5))
+        let doc = AnnotationDocument(image: try fixture(width: 400, height: 300))
+        let canvas = AnnotationCanvas(document: doc)
+        doc.commit(state: AnnotationState(annotations: [arrow]), label: "Fixture")
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 125)); canvas.endInteraction()
+        expect(canvas.selectedID == arrow.id)
+        canvas.selectedID = nil
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.endInteraction()
+        expect(canvas.selectedID == nil)
+        canvas.selectTool(.eraser)
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 100)); canvas.endInteraction()
+        expect(doc.state.annotations.count == 1)
+        canvas.beginInteraction(at: CGPoint(x: 200, y: 125)); canvas.endInteraction()
+        expect(doc.state.annotations.isEmpty)
+    }
+    @MainActor func squareCropEdges() throws {
+        let doc = AnnotationDocument(image: try fixture(width: 100, height: 80))
+        let canvas = AnnotationCanvas(document: doc)
+        canvas.isCropping = true
+        canvas.beginInteraction(at: CGPoint(x: 80, y: 70)); canvas.updateInteraction(to: CGPoint(x: 100, y: 80), shift: true); canvas.endInteraction()
+        expect(doc.state.crop == CGRect(x: 80, y: 70, width: 10, height: 10))
+        canvas.setCrop(CGRect(x: 20, y: 10, width: 20, height: 20))
+        canvas.beginInteraction(at: CGPoint(x: 40, y: 30)); canvas.updateInteraction(to: CGPoint(x: 100, y: 80), shift: true); canvas.endInteraction()
+        expect(doc.state.crop == CGRect(x: 20, y: 10, width: 70, height: 70))
+        canvas.setCrop(CGRect(x: 20, y: 30, width: 20, height: 20))
+        canvas.beginInteraction(at: CGPoint(x: 20, y: 30)); canvas.updateInteraction(to: CGPoint(x: -100, y: -100), shift: true); canvas.endInteraction()
+        expect(doc.state.crop == CGRect(x: 0, y: 10, width: 40, height: 40))
     }
 
     @MainActor func history() throws {

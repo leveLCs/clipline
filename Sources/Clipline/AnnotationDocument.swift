@@ -73,7 +73,9 @@ struct Annotation: Identifiable, Equatable, Codable {
 
     var bounds: CGRect {
         var geometry: CGRect
-        if !points.isEmpty && [.line, .arrow, .pen, .highlighter].contains(kind) {
+        if let arrow = AnnotationArrowGeometry(self) {
+            geometry = arrow.shaft.boundingBoxOfPath.union(arrow.head.boundingBoxOfPath)
+        } else if !points.isEmpty && [.line, .arrow, .pen, .highlighter].contains(kind) {
             geometry = points.reduce(CGRect(origin: points[0], size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
         } else { geometry = rect.standardized }
         if kind == .step {
@@ -107,6 +109,10 @@ struct Annotation: Identifiable, Equatable, Codable {
         return result
     }
     func contains(_ point: CGPoint, tolerance: CGFloat = 4) -> Bool {
+        if let arrow = AnnotationArrowGeometry(self) {
+            if kind == .note && hypot(point.x - rect.minX, point.y - rect.minY) <= style.size / 2 + tolerance { return true }
+            return arrow.contains(point, style: style, tolerance: tolerance)
+        }
         if [.pen, .highlighter, .line, .arrow].contains(kind) {
             if points.count == 1 { return hypot(point.x - points[0].x, point.y - points[0].y) <= max(style.lineWidth / 2, tolerance) }
             let path = points.count >= 2 ? points : [rect.origin, CGPoint(x: rect.maxX, y: rect.maxY)]
@@ -120,6 +126,47 @@ struct Annotation: Identifiable, Equatable, Codable {
             return false
         }
         return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+    }
+}
+
+/// Rendering and hit testing use exactly the same shaft and head, including quadratic curves.
+struct AnnotationArrowGeometry {
+    let shaft: CGPath
+    let head: CGPath
+    let arrowStyle: AnnotationArrowStyle
+    init?(_ item: Annotation) {
+        if item.kind == .arrow { arrowStyle = item.style.arrowStyle }
+        else if item.kind == .note {
+            switch item.style.noteStyle {
+            case .solidArrow: arrowStyle = .open
+            case .dashedArrow: arrowStyle = .dashed
+            case .curvedArrow: arrowStyle = .curved
+            default: return nil
+            }
+        } else { return nil }
+        let a = item.points.first ?? item.rect.origin
+        let b = item.points.count >= 2 ? item.points[1] : CGPoint(x: item.rect.maxX, y: item.rect.maxY)
+        let dx = b.x - a.x, dy = b.y - a.y, length = hypot(dx, dy)
+        guard length > 0 else { return nil }
+        let unit = CGPoint(x: dx / length, y: dy / length)
+        let size = min(length / 2, max(item.style.lineWidth * 4, 12))
+        let base = CGPoint(x: b.x - unit.x * size, y: b.y - unit.y * size)
+        let left = CGPoint(x: base.x - unit.y * size / 2, y: base.y + unit.x * size / 2)
+        let right = CGPoint(x: base.x + unit.y * size / 2, y: base.y - unit.x * size / 2)
+        let shaft = CGMutablePath(); shaft.move(to: a)
+        if arrowStyle == .curved {
+            shaft.addQuadCurve(to: b, control: CGPoint(x: (a.x + b.x) / 2 - dy * 0.25, y: (a.y + b.y) / 2 + dx * 0.25))
+        } else { shaft.addLine(to: arrowStyle == .emphasis ? base : b) }
+        let head = CGMutablePath(); head.move(to: left); head.addLine(to: b); head.addLine(to: right)
+        if arrowStyle == .emphasis { head.closeSubpath() }
+        self.shaft = shaft; self.head = head
+    }
+    func contains(_ point: CGPoint, style: AnnotationStyle, tolerance: CGFloat) -> Bool {
+        let width = max(style.lineWidth, tolerance * 2)
+        let shaft = arrowStyle == .dashed ? self.shaft.copy(dashingWithPhase: 0, lengths: [8, 6]) : self.shaft
+        if shaft.copy(strokingWithWidth: width, lineCap: .round, lineJoin: .round, miterLimit: 10).contains(point) { return true }
+        if arrowStyle == .emphasis && head.contains(point) { return true }
+        return head.copy(strokingWithWidth: width, lineCap: .round, lineJoin: .round, miterLimit: 10).contains(point)
     }
 }
 
